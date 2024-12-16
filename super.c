@@ -66,6 +66,11 @@ static int mgwfs_fill_super(struct super_block *sb, void *data, int silent) {
     sb->s_fs_info = mgwfs_sb;
     sb->s_maxbytes = mgwfs_sb->blocksize;
     sb->s_op = &mgwfs_sb_ops;
+	if ( !sb_rdonly(sb) )
+	{
+		pr_info("mgwfs_fill_sb(): Not mounted ro, setting ro flag\n");
+		sb->s_flags |= SB_RDONLY;
+	}
 
     root_mgwfs_inode = mgwfs_get_mgwfs_inode(sb, MGWFS_ROOTDIR_INODE_NO);
     root_inode = new_inode(sb);
@@ -148,7 +153,8 @@ int mgwfs_statfs(struct dentry *dirp, struct kstatfs *statp)
     statp->f_files = sbi->inode_table_size;
 	statp->f_ffree = sbi->inode_table_size - sbi->inode_count;
     statp->f_namelen = MGWFS_FILENAME_MAXLEN;
-
+	if ( sb_rdonly(sb) )
+		statp->f_flags |= ST_RDONLY;
     return 0;
 }
 

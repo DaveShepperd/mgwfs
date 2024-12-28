@@ -12,13 +12,17 @@ struct file_system_type mgwfs_fs_type = {
 
 const struct super_operations mgwfs_sb_ops = {
     .destroy_inode = mgwfs_destroy_inode,
+#if 0
     .put_super = mgwfs_put_super,
+#endif
 	.statfs = mgwfs_statfs,
 };
 
 const struct inode_operations mgwfs_inode_ops = {
+#if 0
     .create = mgwfs_create,
     .mkdir = mgwfs_mkdir,
+#endif
     .lookup = mgwfs_lookup,
 };
 
@@ -29,7 +33,9 @@ const struct file_operations mgwfs_dir_operations = {
 
 const struct file_operations mgwfs_file_operations = {
     .read = mgwfs_read,
+#if 0
     .write = mgwfs_write,
+#endif
 };
 
 struct kmem_cache *mgwfs_inode_cache = NULL;
@@ -39,7 +45,7 @@ static int __init mgwfs_init(void)
     int ret;
 
     mgwfs_inode_cache = kmem_cache_create("mgwfs_inode_cache",
-                                         sizeof(struct mgwfs_inode),
+                                         sizeof(MgwfsInode_t),
                                          0,
                                          (SLAB_RECLAIM_ACCOUNT /*| SLAB_MEM_SPREAD*/),
                                          NULL);

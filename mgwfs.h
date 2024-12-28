@@ -4,44 +4,59 @@
 #define FSYS_FEATURES (FSYS_FEATURES_CMTIME|FSYS_FEATURES_JOURNAL)
 #include "agcfsys.h"
 
-#define BITS_IN_BYTE 8
-#define MGWFS_MAGIC 0xFEEDF00D
-#define MGWFS_DEFAULT_BLOCKSIZE 4096
-#define MGWFS_DEFAULT_INODE_TABLE_SIZE 1024
-#define MGWFS_DEFAULT_DATA_BLOCK_TABLE_SIZE 1024
+//#define BITS_IN_BYTE 8
+//#define MGWFS_MAGIC 0xFEEDF00D
+//#define MGWFS_DEFAULT_BLOCKSIZE 4096
+//#define MGWFS_DEFAULT_INODE_TABLE_SIZE 1024
+//#define MGWFS_DEFAULT_DATA_BLOCK_TABLE_SIZE 1024
 #define MGWFS_FILENAME_MAXLEN 255
 
 /* Define filesystem structures */
 
 extern struct mutex mgwfs_sb_lock;
 
-struct mgwfs_dir_record
+typedef struct
 {
-	char filename[MGWFS_FILENAME_MAXLEN];
-	uint64_t inode_no;
-};
+	uint32_t inode_no;	/* offset into index.sys */
+	uint32_t mode;
+	void *contentsPtr;	/* pointer to file contents (used if type dir) */
+	char *fileName;		/* pointer to filename once found */
+	uint32_t size;		/* file size in bytes */
+	uint32_t clusters;	/* number of clusters allocated for this file */
+	uint32_t ctime;		/* file creation time */
+	uint32_t mtime;		/* file modification time */
+	FsysRetPtr pointers[FSYS_MAX_ALTS][FSYS_MAX_FHPTRS]; /* retrieval pointers */
+} MgwfsInode_t;
 
-struct mgwfs_inode
+#define MGWFS_MNT_OPT_RO			1
+#define MGWFS_MNT_OPT_VERBOSE		2
+#define MGWFS_MNT_OPT_VERBOSE_HOME	4
+#define MGWFS_MNT_OPT_VERBOSE_HEADERS 8
+#define MGWFS_MNT_OPT_VERBOSE_DIR	16
+#define MGWFS_MNT_OPT_VERBOSE_READ	32
+#define MGWFS_MNT_OPT_VERBOSE_INODE	64
+#define MGWFS_MNT_OPT_VERBOSE_INDEX	128
+#define MGWFS_MNT_OPT_ANY_VERBOSE (1|2|4|8|16|32|64|128)
+
+typedef struct
 {
-	mode_t mode;
-	uint64_t inode_no;
-	uint64_t data_block_no;
+	FsysHomeBlock homeBlk;	/* A complete copy of our home block from disk */
+	uint32_t baseSector;	/* sector offset to start of our fs if in a partition */
+	FsysHeader indexSysHdr;	/* copy of the file header of index.sys */
+	uint32_t *indexSys;		/* contents of index.sys */
+	FsysHeader freeMapHdr;	/* copy of file header of freemap.sys */
+	FsysRetPtr *freeMap;	/* contents of freemap.sys */
+	struct buffer_head *bh;
+	sector_t block;
+	uint32_t flags;			/* for now, just verbose flags (see MGWFS_MNT_OPT_VERBOSE_xxx flags above) */
+} MgwfsSuper_t;
 
-	// TODO struct timespec is defined kenrel space,
-	// but mkfs-mgwfs.c is compiled in user space
-	/*struct timespec atime;
-	struct timespec mtime;
-	struct timespec ctime;*/
+extern uint8_t* mgwfs_getSector(struct super_block *sb, sector_t sector, int *numBytes);
+extern int mgwfs_getFileHeader(struct super_block *sb, const char *title, uint32_t id, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp);
+extern int mgwfs_readFile(struct super_block *sb, const char *title, uint8_t *dst, int bytes, FsysRetPtr *retPtr);
 
-	union
-	{
-		uint64_t file_size;
-		uint64_t dir_children_count;
-	};
-};
-
+#if 0
 #define MGWFS_SB_FLAG_VERBOSE (1)
-
 struct mgwfs_superblock
 {
 	uint64_t version;
@@ -85,5 +100,6 @@ static inline uint64_t MGWFS_DATA_BLOCK_TABLE_START_BLOCK_NO_HSB(
 		   + mgwfs_sb->inode_table_size / MGWFS_INODES_PER_BLOCK_HSB(mgwfs_sb)
 		   + 1;
 }
+#endif
 
 #endif /*__MGWFS_H__*/

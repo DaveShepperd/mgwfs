@@ -32,35 +32,36 @@ struct dentry *mgwfs_mount(struct file_system_type *fs_type,
 void mgwfs_kill_superblock(struct super_block *sb);
 
 void mgwfs_destroy_inode(struct inode *inode);
-void mgwfs_put_super(struct super_block *sb);
+// void mgwfs_put_super(struct super_block *sb);
 
-int mgwfs_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry,
-                    umode_t mode, bool excl);
+//int mgwfs_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry,
+//                    umode_t mode, bool excl);
 struct dentry *mgwfs_lookup(struct inode *parent_inode,
                                struct dentry *child_dentry,
                                unsigned int flags);
-int mgwfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry,
-                   umode_t mode);
+//int mgwfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry,
+//                   umode_t mode);
 
 int mgwfs_readdir(struct file *filp, struct dir_context *dirCtx /*void *dirent, filldir_t filldir*/);
 
 ssize_t mgwfs_read(struct file * filp, char __user * buf, size_t len,
                       loff_t * ppos);
-ssize_t mgwfs_write(struct file * filp, const char __user * buf, size_t len,
-                       loff_t * ppos);
+//ssize_t mgwfs_write(struct file * filp, const char __user * buf, size_t len,
+//                       loff_t * ppos);
 
 extern struct kmem_cache *mgwfs_inode_cache;
 
 /* Helper functions */
 
 // To translate VFS superblock to mgwfs superblock
-static inline struct mgwfs_superblock *MGWFS_SB(struct super_block *sb) {
-    return sb->s_fs_info;
+static inline MgwfsSuper_t *MGWFS_SB(struct super_block *sb) {
+    return (MgwfsSuper_t *)sb->s_fs_info;
 }
-static inline struct mgwfs_inode *MGWFS_INODE(struct inode *inode) {
-    return inode->i_private;
+static inline MgwfsInode_t *MGWFS_INODE(struct inode *inode) {
+    return (MgwfsInode_t *)inode->i_private;
 }
 
+#if 0
 static inline uint64_t MGWFS_INODES_PER_BLOCK(struct super_block *sb) {
     struct mgwfs_superblock *mgwfs_sb;
     mgwfs_sb = MGWFS_SB(sb);
@@ -93,20 +94,18 @@ static inline uint64_t MGWFS_DATA_BLOCK_TABLE_START_BLOCK_NO(struct super_block 
 }
 
 void mgwfs_save_sb(struct super_block *sb);
+#endif
 
 // functions to operate inode
-void mgwfs_fill_inode(struct super_block *sb, struct inode *inode,
-                        struct mgwfs_inode *mgwfs_inode);
+void mgwfs_fill_inode(struct super_block *sb, struct inode *inode, MgwfsInode_t *mgwfs_inode, const char *fName);
 int mgwfs_alloc_mgwfs_inode(struct super_block *sb, uint64_t *out_inode_no);
-struct mgwfs_inode *mgwfs_get_mgwfs_inode(struct super_block *sb,
-                                                uint64_t inode_no);
-void mgwfs_save_mgwfs_inode(struct super_block *sb,
-                                struct mgwfs_inode *inode);
-int mgwfs_add_dir_record(struct super_block *sb, struct inode *dir,
-                           struct dentry *dentry, struct inode *inode);
+MgwfsInode_t *mgwfs_get_mgwfs_inode(struct super_block *sb, uint32_t inode_no, int generation, const char *fileName );
+#if 0
+void mgwfs_save_mgwfs_inode(struct super_block *sb, MgwfsInode_t *inode);
+int mgwfs_add_dir_record(struct super_block *sb, struct inode *dir, struct dentry *dentry, struct inode *inode);
 int mgwfs_alloc_data_block(struct super_block *sb, uint64_t *out_data_block_no);
-int mgwfs_create_inode(struct inode *dir, struct dentry *dentry,
-                         umode_t mode);
+int mgwfs_create_inode(struct inode *dir, struct dentry *dentry, umode_t mode);
+#endif
 int mgwfs_statfs(struct dentry *dirp, struct kstatfs *statp);
 
 #endif /*__KMGWFS_H__*/

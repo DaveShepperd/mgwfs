@@ -11,7 +11,7 @@ CFLAGS_file.o := -DDEBUG
 SA_CFLAGS = -c -Wall -ansi -std=c99 -g
 SA_LFLAGS = -g
 
-all: ko mkfs-mgwfs dmpfs-mgwfs
+all: ko dmpfs-mgwfs #mkfs-mgwfs 
 
 ko:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules

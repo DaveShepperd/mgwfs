@@ -218,10 +218,9 @@ static int getHomeBlock(int fd, uint32_t *lbas, FsysHomeBlock *homeBlkp, off64_t
 			continue;
 		}
 		cksum = 0;
-		csp = (uint32_t *)lclHomes;
+		csp = (uint32_t *)lclHome;
 		for (jj=0; jj < sizeof(FsysHomeBlock)/sizeof(uint32_t); ++jj)
 			cksum += *csp++;
-		*ckSumP = cksum;
 		options = lclHome->features & lclHome->options & (FSYS_FEATURES_CMTIME | FSYS_FEATURES_EXTENSION_HEADER | FSYS_FEATURES_ABTIME);
 		if (    lclHome->id == FSYS_ID_HOME
 			 && lclHome->rp_major == 1
@@ -233,6 +232,7 @@ static int getHomeBlock(int fd, uint32_t *lbas, FsysHomeBlock *homeBlkp, off64_t
 		   )
 		{
 			good |= 1<<ii;
+			*ckSumP = cksum;
 		}
 		else
 		{
@@ -346,21 +346,21 @@ static int readFile(const char *title, int fd, uint8_t *dst, int bytes, FsysRetP
 		sector = retPtr->start;
 		blkLimit = retPtr->nblocks;
 		limit = bytes - retSize;
-		if ( blkLimit*512 > limit )
-			blkLimit = ((blkLimit*512-limit)+511)/512;
+		if ( blkLimit*BYTES_PER_SECTOR > limit )
+			blkLimit = ((blkLimit*BYTES_PER_SECTOR-limit)+BYTES_PER_SECTOR-1)/512;
 		if ( (verbose&VERBOSE_READ) )
 		{
 			printf("Attempting to read %ld bytes for %s. ptrIdx=%d, sector=0x%X, nblocks=%d (limited blocks=%d)\n",
 			   limit, title, ptrIdx, retPtr->start, retPtr->nblocks, blkLimit);
 		}
-		if ( lseek64(fd,(sector+baseSector)*512,SEEK_SET) == (off64_t)-1 )
+		if ( lseek64(fd,(sector+baseSector)*BYTES_PER_SECTOR,SEEK_SET) == (off64_t)-1 )
 		{
 			fprintf(stderr,"Failed to seek to sector 0x%lX: %s\n", sector, strerror(errno));
 			return -1;
 		}
-		if ( limit > retPtr->nblocks*512 )
+		if ( limit > retPtr->nblocks*BYTES_PER_SECTOR )
 		{
-			limit = retPtr->nblocks*512;
+			limit = retPtr->nblocks*BYTES_PER_SECTOR;
 			++retPtr;
 			++ptrIdx;
 		}

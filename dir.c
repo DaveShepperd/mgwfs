@@ -111,7 +111,7 @@ int mgwfs_readdir(struct file *dirp, struct dir_context *ctx)
 		if ( !skipDots )
 		{
 			FsysHeader hdr;
-			if ( mgwfs_getFileHeader(sb, dirContents, FSYS_ID_HEADER, ourSuper->indexSys + fid*FSYS_MAX_ALTS, &hdr) )
+			if ( mgwfs_getFileHeader(sb, dirContents, FSYS_ID_HEADER, fid, ourSuper->indexSys + fid*FSYS_MAX_ALTS, &hdr) )
 			{
 				if ( !dir_emit(ctx, dirContents, txtLen - 1, fid, hdr.type == FSYS_TYPE_DIR ? DT_DIR : DT_REG) )
 					break;

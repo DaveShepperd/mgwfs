@@ -114,7 +114,7 @@ MgwfsInode_t* mgwfs_get_mgwfs_inode(struct super_block *sb, uint32_t inode_no, i
 	MgwfsInode_t *ourInode;
 	FsysHeader hdr;
 
-	if ( !mgwfs_getFileHeader(sb, fileName, FSYS_ID_HEADER, ourSuper->indexSys + inode_no * FSYS_MAX_ALTS, &hdr) )
+	if ( !mgwfs_getFileHeader(sb, fileName, FSYS_ID_HEADER, inode_no, ourSuper->indexSys + inode_no * FSYS_MAX_ALTS, &hdr) )
 		return NULL;
 	if ( generation && hdr.generation != generation )
 		return NULL;

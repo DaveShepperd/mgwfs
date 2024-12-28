@@ -52,7 +52,7 @@ typedef struct
 } MgwfsSuper_t;
 
 extern uint8_t* mgwfs_getSector(struct super_block *sb, sector_t sector, int *numBytes);
-extern int mgwfs_getFileHeader(struct super_block *sb, const char *title, uint32_t id, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp);
+extern int mgwfs_getFileHeader(struct super_block *sb, const char *title, uint32_t fhID, uint32_t fileID, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp);
 extern int mgwfs_readFile(struct super_block *sb, const char *title, uint8_t *dst, int bytes, FsysRetPtr *retPtr);
 
 #if 0

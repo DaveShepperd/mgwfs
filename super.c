@@ -106,6 +106,7 @@ typedef struct bootsect
 	uint16_t end_sig;        /* 0x1FE end signature */
 } BootSect_t /* __attribute__((packed)) */;
 
+#if 0
 static void displayFileHeader(int alert, FsysHeader *fhp, int retrievalsToo)
 {
 	FsysRetPtr *rp;
@@ -161,30 +162,33 @@ static void displayFileHeader(int alert, FsysHeader *fhp, int retrievalsToo)
 	txt[len] = 0;
 	printk(txt);
 }
+#endif
 
-int mgwfs_getFileHeader(struct super_block *sb, const char *title, uint32_t id, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp)
+int mgwfs_getFileHeader(struct super_block *sb, const char *title, uint32_t headerID, uint32_t fileID, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp)
 {
 	FsysHeader *lclHdrs, *lclFhp, *tmpFhp;
 	MgwfsSuper_t *ourSuper = (MgwfsSuper_t *)sb->s_fs_info;
-	int ii, ret, good = 0, match = 0, displayed;
+	int ii, ret, good = 0, match = 0;
 	sector_t sector;
 	uint8_t *bufPtr;
+//	int displayed=0;
 	
 	lclHdrs = (FsysHeader *)kzalloc(sizeof(FsysHeader)*FSYS_MAX_ALTS,GFP_KERNEL);
 	lclFhp = lclHdrs;
-	displayed = 0;
+	if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_HEADERS) )
+		pr_info("mgwfs_getFileHeader(): Attempting to read file header for fid %d: '%s'. lbas=0x%08X 0x%08X 0x%08X\n", fileID, title, lbas[0], lbas[1], lbas[2]);
 	for ( ii = 0; ii < FSYS_MAX_ALTS; ++ii, ++lclFhp )
 	{
 		sector = lbas[ii] + ourSuper->baseSector;
 		if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_HEADERS) )
-			pr_info("mgwfs: Attempting to read file header for '%s' at sector 0x%llX\n", title, sector);
+			pr_info("mgwfs_getFileHeader(): Attempting to read file header for fid %d: '%s' at sector 0x%llX\n", fileID, title, sector);
 		bufPtr = mgwfs_getSector(sb,sector,NULL);
 		BUG_ON(!bufPtr);
 		tmpFhp = (FsysHeader *)bufPtr;
-		if ( tmpFhp->id != id )
+		if ( tmpFhp->id != headerID )
 		{
-			pr_warn("mgwfs(): Sector at 0x%llX is not a file header:\n", sector);
-			displayFileHeader(1, tmpFhp, 0);
+			pr_warn("mgwfs_getFileHeader(): File %d: %s: Sector at 0x%llX is not a file header:\n", fileID, title, sector);
+//			displayFileHeader(1, tmpFhp, 0);
 			continue;
 		}
 		memcpy(lclFhp, tmpFhp, sizeof(FsysHeader));
@@ -197,13 +201,13 @@ int mgwfs_getFileHeader(struct super_block *sb, const char *title, uint32_t id, 
 		{
 			if ( !memcmp(lclHdrs, lclFhp, sizeof(FsysHeader)) )
 				match |= 1 << ii;
-			else
+			else 
 			{
-				pr_warn("mgwfs(): Header %d does not match header 0\nmgwfs(): here is header 0:\n", ii);
-				displayFileHeader(1, lclHdrs, 0);
-				pr_warn("mgwfs(): And here is header %d:\n", ii);
-				displayFileHeader(1, lclFhp, 0);
-				displayed = 1;
+				pr_warn("mgwfs_getFileHeader(): Header %d does not match header 0\nmgwfs(): here is header 0:\n", ii);
+//				displayFileHeader(1, lclHdrs, 0);
+//				pr_warn("mgwfs_getFileHeader(): And here is header %d:\n", ii);
+//				displayFileHeader(1, lclFhp, 0);
+//				displayed = 1;
 			}
 		}
 	}
@@ -225,8 +229,8 @@ int mgwfs_getFileHeader(struct super_block *sb, const char *title, uint32_t id, 
 		ret = 0;
 	}
 	kfree(lclHdrs);
-	if ( !displayed && (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_HEADERS) )
-		displayFileHeader(0, tmpFhp, 0);
+//	if ( !displayed && (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_HEADERS) )
+//		displayFileHeader(0, tmpFhp, 0);
 	return ret;
 }
 
@@ -464,7 +468,7 @@ static int getOurSuper(struct super_block *sb, int flags)
 	ourSuper->flags = flags;
 	memcpy(&ourSuper->homeBlk, lclHome, sizeof(ourSuper->homeBlk));  /* Keep a copy of a good home block */
 	ourSuper->baseSector = baseSector;
-	if ( !mgwfs_getFileHeader(sb, "index.sys", FSYS_ID_INDEX, ourSuper->homeBlk.index, &ourSuper->indexSysHdr) )
+	if ( !mgwfs_getFileHeader(sb, "index.sys", FSYS_ID_INDEX, 0, ourSuper->homeBlk.index, &ourSuper->indexSysHdr) )
 	{
 		return -EINVAL;
 	}

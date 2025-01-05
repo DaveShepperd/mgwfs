@@ -1,5 +1,5 @@
 
-mgwfs - Read/write Atari Games/Midway Games West filesystems.
+mgwfs - Read/write Atari Games/Midway Games West filesystem.
 ===
 
 This was cloned from hellofs which in turn cloned from simplefs. This no longer resembles hellofs being it uses the filesystem structure of the game's disk image.
@@ -11,4 +11,20 @@ and lots of changes to the various kernel API's have been made between kernel ve
 
 The license remains GPL because some kernel functions require it to be available.
 
+You will obviously need the kernel-headers and possibly the kernel-devel to build the module. Make it and install the module:
+```
+make
+sudo insmod mgwfs.ko
+```
+If the game disk is connected directly to your Linux machine at, for example, **/dev/sdg**, mount it like this:
+```
+sudo mkdir -p /mnt/agame
+sudo mount -t mgwfs -o ro /dev/sdg /mnt/agame
+```
+If the game disk image is in a file, for example **./agame.img**, you would mount it like this:
+```
+sudo mkdir -p /mnt/agame
+sudo mount -t mgwfs -o ro,loop ./agame.img /mnt/agame
+```
+Good luck.
 

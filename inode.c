@@ -1,16 +1,30 @@
 #include "kmgwfs.h"
 
+/* NOTE: This function may be called after "our" superblock has been free'd as part of umount and/or module removal (mgwfs_exit()) */
 void mgwfs_destroy_inode(struct inode *inode)
 {
-	MgwfsInode_t *mgwfs_inode = MGWFS_INODE(inode);
+	MgwfsInode_t *mgwfs_inode;
 
-	printk(KERN_INFO "Freeing private data of inode %p (%lu)\n",
-		   mgwfs_inode, inode->i_ino);
-	if ( mgwfs_inode->contentsPtr )
-		kfree(mgwfs_inode->contentsPtr);
-	if ( mgwfs_inode->fileName )
-		kfree(mgwfs_inode->fileName);
-	kmem_cache_free(mgwfs_inode_cache, mgwfs_inode);
+	mgwfs_inode = MGWFS_INODE(inode);
+	if ( mgwfs_inode )
+	{
+		struct super_block *sb;
+		MgwfsSuper_t *ourSuper=NULL;
+
+		sb = inode->i_sb;
+		if ( sb )
+			ourSuper = MGWFS_SB(sb);
+		if ( !ourSuper || (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_INODE) )
+			pr_info("mgwfs_destroy_inode(): Freeing private data of inode %p (%lu). ourSuper=%p, contents=%p, fileName=%p, bh=%p\n",
+					mgwfs_inode, inode->i_ino, ourSuper, mgwfs_inode->contentsPtr, mgwfs_inode->fileName, mgwfs_inode->buffer.bh);
+		if ( mgwfs_inode->contentsPtr )
+			kfree(mgwfs_inode->contentsPtr);
+		if ( mgwfs_inode->fileName )
+			kfree(mgwfs_inode->fileName);
+		if ( mgwfs_inode->buffer.bh )
+			brelse(mgwfs_inode->buffer.bh);
+		kmem_cache_free(mgwfs_inode_cache, mgwfs_inode);
+	}
 }
 
 void mgwfs_fill_inode(struct super_block *sb, struct inode *inode,
@@ -343,7 +357,7 @@ struct dentry* mgwfs_lookup(struct inode *dir,
 				   parentInode->size, parentInode->fileName ? parentInode->fileName : "<unknown>", parentInode->inode_no);
 			return NULL;
 		}
-		if ( !mgwfs_readFile(sb,child_dentry->d_name.name,dirContents,parentInode->size,parentInode->pointers[0]))
+		if ( !mgwfs_readFile(sb,child_dentry->d_name.name,dirContents,parentInode->size,parentInode->pointers[0],0))
 		{
 			kfree(dirContents);
 			printk(KERN_ERR "mgwfs_lookup(): Failed to read directory contents of %s.\n",
@@ -404,6 +418,7 @@ struct dentry* mgwfs_lookup(struct inode *dir,
 		++dirEnt;
 		dirContents += txtLen;
 	}
-	printk(KERN_ERR "mgwfs_lookup(): No inode found for the filename: %s\n", child_dentry->d_name.name);
+	if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_DIR) )
+		printk(KERN_WARNING "mgwfs_lookup(): No inode found for the filename: %s\n", child_dentry->d_name.name);
 	return NULL;
 }

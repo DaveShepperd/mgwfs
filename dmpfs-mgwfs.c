@@ -65,9 +65,9 @@ off64_t baseSector;
 #define VERBOSE_HOME	(1<<0)	/* display home block */
 #define VERBOSE_HEADERS	(1<<1)	/* display file headers */
 #define VERBOSE_READ	(1<<2)	/* display read requests */
-#define VERBOSE_INDEX	(1<<3)	/* display index.sys file */
-#define VERBOSE_FREEMAP	(1<<4)	/* display freemap file */
-#define VERBOSE_DMPROOT	(1<<5)	/* dump root directory contents */
+#define VERBOSE_INDEX	(1<<3)	/* display index.sys file and header */
+#define VERBOSE_FREEMAP	(1<<4)	/* display freemap file and header */
+#define VERBOSE_DMPROOT	(1<<5)	/* dump root directory contents and header */
 #define VERBOSE_ITERATE	(1<<6)	/* iterate directory tree */
 static int verbose=VERBOSE_HOME;	/* Default to reading home block(s) */
 
@@ -646,7 +646,11 @@ int main(int argc, char *argv[])
 			break;
 		}
 		if ( (verbose & VERBOSE_INDEX) )
+		{
+			if ( !(verbose&VERBOSE_HEADERS) )
+				displayFileHeader(stdout,&indexFileHeader,1);
 			dumpIndex(indexFileContents, indexFileHeader.size);
+		}
 		if ( getFileHeader("freemap.sys", fd, FSYS_ID_HEADER, indexFileContents+FSYS_INDEX_FREE*FSYS_MAX_ALTS,&freemapFileHeader ) )
 		{
 			if ( (verbose & VERBOSE_HEADERS) )

@@ -33,12 +33,13 @@ const struct file_operations mgwfs_dir_operations = {
 
 const struct file_operations mgwfs_file_operations = {
     .read = mgwfs_read,
+	.llseek = mgwfs_llseek,
 #if 0
     .write = mgwfs_write,
 #endif
 };
 
-struct kmem_cache *mgwfs_inode_cache = NULL;
+struct kmem_cache *mgwfs_inode_cache;
 
 static int __init mgwfs_init(void)
 {
@@ -55,9 +56,9 @@ static int __init mgwfs_init(void)
 
     ret = register_filesystem(&mgwfs_fs_type);
     if (likely(0 == ret)) {
-        printk(KERN_INFO "Sucessfully registered mgwfs\n");
+        printk(KERN_INFO "mgwfs_init(): Sucessfully registered mgwfs\n");
     } else {
-        printk(KERN_ERR "Failed to register mgwfs. Error code: %d\n", ret);
+        printk(KERN_ERR "mgwfs_init(): Failed to register mgwfs. Error code: %d\n", ret);
     }
 
     return ret;
@@ -69,11 +70,12 @@ static void __exit mgwfs_exit(void)
 
     ret = unregister_filesystem(&mgwfs_fs_type);
     kmem_cache_destroy(mgwfs_inode_cache);
+	mgwfs_inode_cache = NULL;
 
     if (likely(ret == 0)) {
-        printk(KERN_INFO "Sucessfully unregistered mgwfs\n");
+        printk(KERN_INFO "mgwfs_exit(): Sucessfully unregistered mgwfs\n");
     } else {
-        printk(KERN_ERR "Failed to unregister mgwfs. Error code: %d\n",
+        printk(KERN_ERR "mgwfs_exit(): Failed to unregister mgwfs. Error code: %d\n",
                ret);
     }
 }
@@ -82,4 +84,4 @@ module_init(mgwfs_init);
 module_exit(mgwfs_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("accelazh");
+MODULE_AUTHOR("shepperd");

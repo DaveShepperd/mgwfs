@@ -67,7 +67,7 @@ int mgwfs_readdir(struct file *dirp, struct dir_context *ctx)
 				   ourInode->size, ourInode->fileName ? ourInode->fileName : "<unknown>", ourInode->inode_no);
 			return 0;
 		}
-		if ( !mgwfs_readFile(sb,ourInode->fileName,dirContents,ourInode->size,ourInode->pointers[0]))
+		if ( !mgwfs_readFile(sb,ourInode->fileName,dirContents,ourInode->size,ourInode->pointers[0],0))
 		{
 			kfree(dirContents);
 			printk(KERN_ERR "mgwfs_readdir(): Failed to read directory contents of %s (fid=%d).\n",

@@ -17,10 +17,17 @@ extern struct mutex mgwfs_sb_lock;
 
 typedef struct
 {
+	struct buffer_head *bh;	/* read data buffer */
+	sector_t block;			/* block identifying the data in buffer */
+} MgwfsBlock_t;
+
+typedef struct
+{
 	uint32_t inode_no;	/* offset into index.sys */
-	uint32_t mode;
+	uint32_t mode;		/* File access mode */
 	void *contentsPtr;	/* pointer to file contents (used if type dir) */
 	char *fileName;		/* pointer to filename once found */
+	MgwfsBlock_t buffer;
 	uint32_t size;		/* file size in bytes */
 	uint32_t clusters;	/* number of clusters allocated for this file */
 	uint32_t ctime;		/* file creation time */
@@ -38,22 +45,22 @@ typedef struct
 #define MGWFS_MNT_OPT_VERBOSE_INDEX	128
 #define MGWFS_MNT_OPT_ANY_VERBOSE (1|2|4|8|16|32|64|128)
 
-typedef struct
+typedef struct MgwfsSuper_t
 {
+	struct super_block *hisSb; /* Just for reference */
 	FsysHomeBlock homeBlk;	/* A complete copy of our home block from disk */
 	uint32_t baseSector;	/* sector offset to start of our fs if in a partition */
 	FsysHeader indexSysHdr;	/* copy of the file header of index.sys */
 	uint32_t *indexSys;		/* contents of index.sys */
 	FsysHeader freeMapHdr;	/* copy of file header of freemap.sys */
 	FsysRetPtr *freeMap;	/* contents of freemap.sys */
-	struct buffer_head *bh;
-	sector_t block;
+	MgwfsBlock_t buffer;
 	uint32_t flags;			/* for now, just verbose flags (see MGWFS_MNT_OPT_VERBOSE_xxx flags above) */
 } MgwfsSuper_t;
 
-extern uint8_t* mgwfs_getSector(struct super_block *sb, sector_t sector, int *numBytes);
+extern uint8_t* mgwfs_getSector(struct super_block *sb, MgwfsBlock_t *buffp, sector_t sector, int *numBytes);
 extern int mgwfs_getFileHeader(struct super_block *sb, const char *title, uint32_t fhID, uint32_t fileID, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp);
-extern int mgwfs_readFile(struct super_block *sb, const char *title, uint8_t *dst, int bytes, FsysRetPtr *retPtr);
+extern int mgwfs_readFile(struct super_block *sb, const char *title, uint8_t *dst, int bytes, FsysRetPtr *retPtr, int squawk);
 
 #if 0
 #define MGWFS_SB_FLAG_VERBOSE (1)

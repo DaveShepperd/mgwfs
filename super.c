@@ -19,7 +19,7 @@ static int parse_options(struct super_block *sb, char *options)
 	int flags=0;
 	char *p;
 
-	pr_info("mgwfs_parse_options: parsing options '%s'\n", options);
+//	pr_info("mgwfs_parse_options: parsing options '%s'\n", options);
 
 	while ( (p = strsep(&options, ",")) )
 	{
@@ -30,41 +30,40 @@ static int parse_options(struct super_block *sb, char *options)
 		token = match_token(p, tokens, args);
 		if ( token == MGWFS_MNT_OPT_RO )
 		{
-			pr_info("mgwfs_parse_options: found read-only flag. Current flags: 0x%lX\n", sb->s_flags);
+//			pr_info("mgwfs_parse_options: found read-only flag. Current flags: 0x%lX\n", sb->s_flags);
 			sb->s_flags |= SB_RDONLY;
 		}
 		else if ( token )
 		{
-			pr_info("mgwfs_parse_options: found flag %d. Current flags: 0x%X\n", token, flags);
+//			pr_info("mgwfs_parse_options: found flag %d. Current flags: 0x%X\n", token, flags);
 			flags |= token;
 		}
 	}
 	return flags;
 }
 
-uint8_t* mgwfs_getSector(struct super_block *sb, sector_t sector, int *numBytes)
+uint8_t *mgwfs_getSector(struct super_block *sb, MgwfsBlock_t *buffP, sector_t sector, int *numBytes)
 {
-	MgwfsSuper_t *ourSuper = (MgwfsSuper_t *)sb->s_fs_info;
 	int bufOffset;
 	int sectorsPerBlock = sb->s_blocksize/BYTES_PER_SECTOR;
 	sector_t block = sector / sectorsPerBlock;
 	
-	if ( !ourSuper->bh || ourSuper->block != block)
+	if ( !buffP->bh || buffP->block != block )
 	{
-		if ( ourSuper->bh )
-			brelse(ourSuper->bh);
-		if ( !(ourSuper->bh = sb_bread(sb,block)) )
+		if ( buffP->bh )
+			brelse(buffP->bh);
+		if ( !(buffP->bh = sb_bread(sb,block)) )
 		{
-			ourSuper->block = 0;
+			buffP->block = 0;
 			*numBytes = 0;
 			return NULL;
 		}
-		ourSuper->block = block;
+		buffP->block = block;
 	}
 	bufOffset = (sector%sectorsPerBlock)*BYTES_PER_SECTOR;
 	if ( numBytes )
 		*numBytes = sb->s_blocksize - bufOffset;
-	return ourSuper->bh->b_data + bufOffset;
+	return buffP->bh->b_data + bufOffset;
 }
 
 typedef struct part
@@ -182,7 +181,7 @@ int mgwfs_getFileHeader(struct super_block *sb, const char *title, uint32_t head
 		sector = lbas[ii] + ourSuper->baseSector;
 		if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_HEADERS) )
 			pr_info("mgwfs_getFileHeader(): Attempting to read file header for fid %d: '%s' at sector 0x%llX\n", fileID, title, sector);
-		bufPtr = mgwfs_getSector(sb,sector,NULL);
+		bufPtr = mgwfs_getSector(sb,&ourSuper->buffer,sector,NULL);
 		BUG_ON(!bufPtr);
 		tmpFhp = (FsysHeader *)bufPtr;
 		if ( tmpFhp->id != headerID )
@@ -234,7 +233,7 @@ int mgwfs_getFileHeader(struct super_block *sb, const char *title, uint32_t head
 	return ret;
 }
 
-int mgwfs_readFile(struct super_block *sb, const char *title, uint8_t *dst, int bytes, FsysRetPtr *retPtr)
+int mgwfs_readFile(struct super_block *sb, const char *title, uint8_t *dst, int bytes, FsysRetPtr *retPtr, int squawk)
 {
 	MgwfsSuper_t *ourSuper = sb->s_fs_info;
 	sector_t sector;
@@ -265,14 +264,21 @@ int mgwfs_readFile(struct super_block *sb, const char *title, uint8_t *dst, int 
 			return retSize ? retSize : -1;
 		}
 		sector = retPtr->start + sectorIdx;
-		bufPointer = mgwfs_getSector(sb,sector,&bytesInBuffer);
+		bufPointer = mgwfs_getSector(sb,&ourSuper->buffer,sector,&bytesInBuffer);
 		BUG_ON(!bufPointer);
 		limit = bytesInBuffer;
 		if ( sectorIdx + limit/BYTES_PER_SECTOR > retPtr->nblocks )
 			limit = (retPtr->nblocks-sectorIdx)*BYTES_PER_SECTOR;
 		if ( limit > bytes - retSize )
 			limit = bytes - retSize;
-		memcpy(dst + retSize, bufPointer, limit);
+		memcpy(dst, bufPointer, limit);
+		if ( squawk && (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_READ) )
+		{
+			uint32_t *ip = (uint32_t *)bufPointer;
+			pr_info("mgwfs_readfile(): mgwfs_getSector(,0x%llX,) returned %p and bytesInBuffer %d. retSize=%d, limit=%ld\n",
+					sector, bufPointer, bytesInBuffer, retSize, limit);
+			pr_info("mgwfs_readfile(): buffer [0]=0x%08X [1]=0x%08X [2]=0x%08X\n", ip[0], ip[1], ip[2]);
+		}
 		dst += limit;
 		retSize += limit;
 		sectorIdx += (limit+BYTES_PER_SECTOR-1)/BYTES_PER_SECTOR;
@@ -391,7 +397,7 @@ static int getOurSuper(struct super_block *sb, int flags)
 	sb->s_fs_info = ourSuper;	/* remember it */
 	memset(lclHomes, 0, sizeof(lclHomes));
 	maxHb = FSYS_HB_RANGE;
-	bufPointer = mgwfs_getSector(sb,0,NULL);
+	bufPointer = mgwfs_getSector(sb,&ourSuper->buffer,0,NULL);
 	BUG_ON(!bufPointer);
 	bootSect = (BootSect_t *)bufPointer;
 	for ( ii = 0; ii < 4; ++ii )
@@ -417,7 +423,7 @@ static int getOurSuper(struct super_block *sb, int flags)
 		sector = homeLbas[ii] + baseSector;
 		if ( (flags & MGWFS_MNT_OPT_VERBOSE_HOME) )
 			pr_info("mgwfs_getHomeBlock(): Attempting to read home block at sector 0x%llX\n", sector);
-		bufPointer = mgwfs_getSector(sb,sector,NULL);
+		bufPointer = mgwfs_getSector(sb,&ourSuper->buffer,sector,NULL);
 		BUG_ON(!bufPointer);
 		memcpy(lclHome, bufPointer, sizeof(FsysHomeBlock));
 		cksum = 0;
@@ -468,7 +474,7 @@ static int getOurSuper(struct super_block *sb, int flags)
 	ourSuper->flags = flags;
 	memcpy(&ourSuper->homeBlk, lclHome, sizeof(ourSuper->homeBlk));  /* Keep a copy of a good home block */
 	ourSuper->baseSector = baseSector;
-	if ( !mgwfs_getFileHeader(sb, "index.sys", FSYS_ID_INDEX, 0, ourSuper->homeBlk.index, &ourSuper->indexSysHdr) )
+	if ( !mgwfs_getFileHeader(sb, "index.sys", FSYS_ID_INDEX, FSYS_INDEX_INDEX, ourSuper->homeBlk.index, &ourSuper->indexSysHdr) )
 	{
 		return -EINVAL;
 	}
@@ -479,7 +485,7 @@ static int getOurSuper(struct super_block *sb, int flags)
 	}
 	for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
 	{
-		if ( mgwfs_readFile(sb, "index.sys", (uint8_t *)ourSuper->indexSys, ourSuper->indexSysHdr.size, ourSuper->indexSysHdr.pointers[ii]) == ourSuper->indexSysHdr.size )
+		if ( mgwfs_readFile(sb, "index.sys", (uint8_t *)ourSuper->indexSys, ourSuper->indexSysHdr.size, ourSuper->indexSysHdr.pointers[ii],1) == ourSuper->indexSysHdr.size )
 			break;
 	}
 	if ( ii >= FSYS_MAX_ALTS )
@@ -489,6 +495,7 @@ static int getOurSuper(struct super_block *sb, int flags)
 	}
 	if ( (ourSuper->flags&MGWFS_MNT_OPT_VERBOSE_INDEX) )
 	{
+#if 0
 		char txt[256];
 		int len=0;
 		for (ii=0; ii < 15; ii += 3)
@@ -501,6 +508,51 @@ static int getOurSuper(struct super_block *sb, int flags)
 							);
 		}
 		pr_info("mgwfs: Index.sys contents:\n%s",txt);
+#else
+		int ii=0;
+		char txt[256];
+		int len;
+		uint32_t bytes = ourSuper->indexSysHdr.size;
+		int entries = (bytes+sizeof(uint32_t)-1)/sizeof(uint32_t);
+		uint32_t *index = ourSuper->indexSys;
+		static const char *Titles[] = 
+		{
+			"index.sys",
+			"freemap.sys",
+			"rootdir.sys",
+			"journal.sys"
+		};
+		pr_info("mgwfs(): Contents of index.sys:\n");
+		while ( index < ourSuper->indexSys+entries )
+		{
+			len = snprintf(txt,sizeof(txt),"mgwfs(): %5d: 0x%08X 0x%08X 0x%08X", ii, index[0], index[1], index[2]);
+			if ( ii < 4 )
+				len += snprintf(txt+len,sizeof(txt)-len," (%s)", Titles[ii]);
+			pr_info("%s\n",txt);
+			++ii;
+			index += 3;
+		}
+#endif
+	}
+	if ( mgwfs_getFileHeader(sb, "freemap.sys", FSYS_ID_HEADER, FSYS_INDEX_FREE, ourSuper->indexSys + FSYS_INDEX_FREE*FSYS_MAX_ALTS, &ourSuper->freeMapHdr) )
+	{
+		ourSuper->freeMap = (FsysRetPtr *)kzalloc(ourSuper->freeMapHdr.clusters * BYTES_PER_SECTOR, GFP_KERNEL);
+		if ( ourSuper->freeMap )
+		{
+			for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
+			{
+				if ( mgwfs_readFile(sb, "freemap.sys", (uint8_t *)ourSuper->freeMap, ourSuper->freeMapHdr.size, ourSuper->freeMapHdr.pointers[ii],1) == ourSuper->freeMapHdr.size )
+					break;
+			}
+			if ( ii >= FSYS_MAX_ALTS )
+			{
+				pr_err("mgwfs(): Failed to read freemap.sys. Ignored.\n");
+				kfree(ourSuper->freeMap);
+				ourSuper->freeMap = NULL;
+			}
+		}
+		else
+			pr_err("mgwfs(): Failed to kzalloc(%d) bytes for freemap.sys. Ignored.\n", ourSuper->freeMapHdr.clusters * BYTES_PER_SECTOR);
 	}
 	return good;
 }
@@ -522,7 +574,7 @@ static int fill_super(struct super_block *sb, void *data, int silent)
 	{
 		flags = ret;
 		if ( (flags & MGWFS_MNT_OPT_ANY_VERBOSE) )
-			pr_info("mgwfs_fill_super: Finished. sb->flags=0x%lX, flags=0x%X\n", sb->s_flags, flags);
+			pr_info("mgwfs_fill_super: After parse: sb=%p, sb->flags=0x%lX, flags=0x%X\n", sb, sb->s_flags, flags);
 	}
 	if ( (flags) )
 		pr_info("mgwfs_fill_super(): s_blocksize=%lu.\n", sb->s_blocksize);
@@ -545,13 +597,13 @@ static int fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_op = &mgwfs_sb_ops;
 	if ( !sb_rdonly(sb) )
 	{
-		pr_info("mgwfs_fill_sb(): Not mounted ro, setting ro flag\n");
+		pr_warn("mgwfs_fill_sb(): Not mounted ro, setting ro flag\n");
 		sb->s_flags |= SB_RDONLY;
 	}
 	root_mgwfs_inode = mgwfs_get_mgwfs_inode(sb, FSYS_INDEX_ROOT, 0, "rootdir.sys");
 	if ( !root_mgwfs_inode )
 	{
-		printk(KERN_ERR "mgwfs(): Failed to get our inode for root dir\n");
+		pr_err("mgwfs(): Failed to get our inode for root dir\n");
 		return -EINVAL;
 	}
 	root_inode = new_inode(sb);
@@ -569,16 +621,47 @@ static int fill_super(struct super_block *sb, void *data, int silent)
 	return 0;
 }
 
+static void local_statfs(struct super_block *sb, MgwfsSuper_t *sbi, struct kstatfs *statp)
+{
+	int numPtrs, totFreeSectors=0, sectorsPerBlock;
+	FsysRetPtr *retPtr;
+	loff_t ffreeFiles;
+	
+	statp->f_type = sbi->homeBlk.id;
+	statp->f_bsize = sb->s_blocksize;
+	sectorsPerBlock = sb->s_blocksize/BYTES_PER_SECTOR;
+	statp->f_blocks = sbi->homeBlk.max_lba/sectorsPerBlock;
+	if ( (retPtr = sbi->freeMap) )
+	{
+		numPtrs = sbi->freeMapHdr.size/sizeof(FsysRetPtr);
+		for (;numPtrs > 0; --numPtrs, ++retPtr)
+		{
+			if ( !retPtr->nblocks )
+				break;
+			totFreeSectors += retPtr->nblocks;
+		}
+	}
+	statp->f_bfree = totFreeSectors/sectorsPerBlock;
+	statp->f_bavail = statp->f_bfree;
+	statp->f_files = sbi->indexSysHdr.size/(sizeof(uint32_t)*FSYS_MAX_ALTS);
+	ffreeFiles = sbi->indexSysHdr.clusters;
+	ffreeFiles = (ffreeFiles*BYTES_PER_SECTOR)/(sizeof(uint32_t)*FSYS_MAX_ALTS);
+	statp->f_ffree = ffreeFiles - statp->f_files;
+	statp->f_flags = sb->s_flags;
+	statp->f_frsize = sb->s_blocksize;
+	statp->f_namelen = MGWFS_FILENAME_MAXLEN;
+}
+
 struct dentry* mgwfs_mount(struct file_system_type *fs_type,
 						   int flags, const char *dev_name,
 						   void *data)
 {
 	struct dentry *ret;
 	ret = mount_bdev(fs_type, flags, dev_name, data, fill_super);
-	pr_info("mgwfs_mount(): returned %p\n", ret);
+//	pr_info("mgwfs_mount(): mount_bdev() (fill_super()) returned %p\n", ret);
 	if ( IS_ERR_OR_NULL(ret) )
 	{
-		printk(KERN_ERR "Error mounting mgwfs on %s. ret=%p\n", dev_name, ret);
+		pr_err("Error mounting mgwfs on %s. ret=%p\n", dev_name, ret);
 	}
 	else
 	{
@@ -586,8 +669,15 @@ struct dentry* mgwfs_mount(struct file_system_type *fs_type,
 		MgwfsSuper_t *ourSuper;
 		sb = ret->d_sb;
 		ourSuper = sb ? MGWFS_SB(sb) : NULL;
-		pr_info("mgwfs is succesfully mounted on: %s, ret=%p, sb=%p, ourSuper=%p\n",
-				dev_name, ret, sb, ourSuper);
+		if ( ourSuper && ourSuper->flags )
+		{
+			struct kstatfs stat;
+			local_statfs(sb,ourSuper,&stat);
+			pr_info("mgwfs is succesfully mounted on: %s, ret=%p, sb=%p, ourSuper=%p\n",
+					dev_name, ret, sb, ourSuper);
+			pr_info("mgwfs blksz %ld, blocks %lld, bfree %lld, bavail %lld, files %lld, freeFiles %lld\n",
+					stat.f_bsize, stat.f_blocks, stat.f_bfree, stat.f_bavail, stat.f_files, stat.f_ffree );
+		}
 	}
 
 	return ret;
@@ -598,17 +688,16 @@ void mgwfs_kill_superblock(struct super_block *sb)
 	MgwfsSuper_t *ourSuper;
 	if ( (ourSuper = sb->s_fs_info) )
 	{
-		if ( ourSuper->bh )
-			brelse(ourSuper->bh);
+		if ( ourSuper->buffer.bh )
+			brelse(ourSuper->buffer.bh);
 		if ( ourSuper->freeMap )
 			kfree(ourSuper->freeMap);
 		if ( ourSuper->indexSys )
 			kfree(ourSuper->indexSys);
+		pr_info("mgwfs_kill_superblock(): Unmount succesful.\n");
 		kfree(ourSuper);
 		sb->s_fs_info = NULL;
 	}
-	printk(KERN_INFO
-		   "mgwfs superblock is destroyed. Unmount succesful.\n");
 	kill_block_super(sb);
 }
 
@@ -639,29 +728,8 @@ int mgwfs_statfs(struct dentry *dirp, struct kstatfs *statp)
 {
 	struct super_block *sb = dirp->d_sb;
 	MgwfsSuper_t *sbi = MGWFS_SB(sb);
-	int numPtrs, totFreeSectors=0;
-	FsysRetPtr *retPtr;
 	
-	statp->f_type = sbi->homeBlk.id;
-	statp->f_bsize = sb->s_blocksize;
-	statp->f_blocks = sbi->homeBlk.max_lba;
-	if ( (retPtr = sbi->freeMap) )
-	{
-		numPtrs = sbi->freeMapHdr.size/sizeof(FsysRetPtr);
-		for (;numPtrs > 0; --numPtrs, ++retPtr)
-		{
-			if ( !retPtr->nblocks )
-				break;
-			totFreeSectors += retPtr->nblocks;
-		}
-	}
-	statp->f_bfree = totFreeSectors*BYTES_PER_SECTOR;
-	statp->f_bavail = statp->f_bfree;
-	statp->f_files = sbi->indexSysHdr.size/(sizeof(FsysRetPtr)*FSYS_MAX_ALTS);
-	statp->f_ffree = (sbi->indexSysHdr.clusters*BYTES_PER_SECTOR)/(sizeof(FsysRetPtr)*FSYS_MAX_ALTS)-statp->f_files;
-	statp->f_namelen = MGWFS_FILENAME_MAXLEN;
-	if ( sb_rdonly(sb) )
-		statp->f_flags |= ST_RDONLY;
+	local_statfs(sb,sbi,statp);
 	return 0;
 }
 

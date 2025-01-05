@@ -46,6 +46,8 @@ int mgwfs_readdir(struct file *filp, struct dir_context *dirCtx /*void *dirent, 
 
 ssize_t mgwfs_read(struct file * filp, char __user * buf, size_t len,
                       loff_t * ppos);
+loff_t mgwfs_llseek(struct file *filp, loff_t offset, int whence);
+
 //ssize_t mgwfs_write(struct file * filp, const char __user * buf, size_t len,
 //                       loff_t * ppos);
 

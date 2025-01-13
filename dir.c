@@ -77,22 +77,31 @@ int mgwfs_readdir(struct file *dirp, struct dir_context *ctx)
 		ourInode->contentsPtr = dirContents;
 	}
 	dirEnt = 0;
+	/* dircontents is always pointing to next directory entry */
 	while ( dirContents < dirContents+ourInode->size )
 	{
 		int txtLen, skipDots;
 		uint8_t gen;
 		uint32_t fid;
 
+		/* The first 3 bytes are a 24 bit file ID, expressed little endian */
 		fid = (dirContents[2]<<16)|(dirContents[1]<<8)|dirContents[0];
 		if ( fid == 0 )
 			break;
 		dirContents += 3;
+		/* The next byte is the file generation number.
+		 * I don't remember what that was meant to do.
+		 * It is a 1 in all the examples I have.
+		 */
 		gen = *dirContents++;
+		/*  The next byte is the length of the filename including a trailing null */
 		txtLen = *dirContents++;
 		if ( !txtLen )
-			txtLen = 256;
+			txtLen = 256;	/* a length of 0 means 256 */
+		/* The next textLen bytes is the filename */
 		if ( dirContents[txtLen-1] )
 		{
+			/* The last byte of the string has to be a null */
 			dirContents[txtLen-1] = 0;
 			printk(KERN_ERR "mgwfs_readdir(): Corrupted directory entry %d in %s:. fid=%d, fn=%s\n",
 				   dirEnt, ourInode->fileName ? ourInode->fileName:"<unknown", fid, dirContents);
@@ -100,6 +109,8 @@ int mgwfs_readdir(struct file *dirp, struct dir_context *ctx)
 		}
 		if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_DIR) )
 			printk( KERN_INFO "mgwfs_readdir():%5d: 0x%08X 0x%02X %3d %s\n", dirEnt, fid, gen, txtLen, dirContents);
+		/* The filesystem maintained a . and .. file ID with all the other names */
+		/* We need to skip them on Linux since Linux maintains them separately */
 		skipDots = 0;
 		if ( dirContents[0] == '.' )
 		{
@@ -117,9 +128,12 @@ int mgwfs_readdir(struct file *dirp, struct dir_context *ctx)
 					break;
 			}
 		}
+		/* Count the entry */
 		++dirEnt;
+		/* Skip to next entry */
 		dirContents += txtLen;
-		ctx->pos += txtLen+5;
+		/* Mark the file position of the next entry */
+		ctx->pos += txtLen+5; /* Advance by the 3 byte FID, 1 byte generation, 1 byte length and txtLen */
 	}
 	return 0;
 }

@@ -1,7 +1,8 @@
 #include "kmgwfs.h"
 
 static const match_table_t tokens = {
-	{ MGWFS_MNT_OPT_RO, "ro" },
+	{ MGWFS_MNT_OPT_ALLOCATION, "allocation=%d" },
+	{ MGWFS_MNT_OPT_COPIES, "copies=%d" },
 	{ MGWFS_MNT_OPT_VERBOSE, "verbose" },
 	{ MGWFS_MNT_OPT_VERBOSE_HOME, "vhome" },
 	{ MGWFS_MNT_OPT_VERBOSE_HEADERS, "vheaders" },
@@ -14,13 +15,12 @@ static const match_table_t tokens = {
 
 static int parse_options(struct super_block *sb, char *options)
 {
+	MgwfsSuper_t *ourSuper;
 	substring_t args[MAX_OPT_ARGS];
-	int token;
-	int flags=0;
+	int token, arg;
 	char *p;
 
-//	pr_info("mgwfs_parse_options: parsing options '%s'\n", options);
-
+	ourSuper = MGWFS_SB(sb);
 	while ( (p = strsep(&options, ",")) )
 	{
 		if ( !*p )
@@ -28,19 +28,34 @@ static int parse_options(struct super_block *sb, char *options)
 
 		args[0].to = args[0].from = NULL;
 		token = match_token(p, tokens, args);
-		if ( token == MGWFS_MNT_OPT_RO )
+		switch (token)
 		{
-//			pr_info("mgwfs_parse_options: found read-only flag. Current flags: 0x%lX\n", sb->s_flags);
-			sb->s_flags |= SB_RDONLY;
-		}
-		else if ( token )
-		{
-//			pr_info("mgwfs_parse_options: found flag %d. Current flags: 0x%X\n", token, flags);
-			flags |= token;
+		case MGWFS_MNT_OPT_ALLOCATION:
+			arg = 0;
+			if ( !args->from || match_int(args, &arg) || arg < 10 || arg > 1000 )
+			{
+				pr_err("mgwfs_parse_options: match_int failed. allocation '%s' has to be > 10 and < 1000\n", args->from ? args->from : "<null>");
+				return -EINVAL;
+			}
+			ourSuper->defaultAllocation = arg;
+			break;
+		case MGWFS_MNT_OPT_COPIES:
+			arg = 0;
+			if ( !args->from || match_int(args, &arg) || arg < 1 || arg > FSYS_MAX_ALTS )
+			{
+				pr_err("mgwfs_parse_options: match_int failed. copies '%s' has to be > 0 and < %d\n", args->from ? args->from : "<null>", FSYS_MAX_ALTS);
+				return -EINVAL;
+			}
+			ourSuper->defaultCopies = arg;
+			break;
+		default:
+			ourSuper->flags |= token;
+			break;
 		}
 	}
-	return flags;
+	return 0;
 }
+
 
 uint8_t *mgwfs_getSector(struct super_block *sb, MgwfsBlock_t *buffP, sector_t sector, int *numBytes)
 {
@@ -375,7 +390,7 @@ static void displayHomeBlock(sector_t sector, const FsysHomeBlock *homeBlkp, uin
 		   );
 }
 
-static int getOurSuper(struct super_block *sb, int flags)
+static int getOurSuper(struct super_block *sb)
 {
 	FsysHomeBlock lclHomes[FSYS_MAX_ALTS], *lclHome = lclHomes;
 	int ii, good = 0, match = 0;
@@ -390,11 +405,10 @@ static int getOurSuper(struct super_block *sb, int flags)
 	uint32_t homeLbas[FSYS_MAX_ALTS];
 	MgwfsSuper_t *ourSuper;
 	uint8_t *bufPointer;
+	int flags;
 	
-	ourSuper = (MgwfsSuper_t *)kzalloc(sizeof(MgwfsSuper_t), GFP_KERNEL); /* Allocate our super block memory*/
-	if ( !ourSuper )
-		return -ENOMEM;
-	sb->s_fs_info = ourSuper;	/* remember it */
+	ourSuper = (MgwfsSuper_t *)sb->s_fs_info;
+	flags= ourSuper->flags;
 	memset(lclHomes, 0, sizeof(lclHomes));
 	maxHb = FSYS_HB_RANGE;
 	bufPointer = mgwfs_getSector(sb,&ourSuper->buffer,0,NULL);
@@ -564,21 +578,30 @@ static int fill_super(struct super_block *sb, void *data, int silent)
 	MgwfsInode_t *root_mgwfs_inode;
 	int ret, flags=0;
 
-	ret = parse_options(sb, data);
-	if ( ret < 0 )
+	ourSuper = (MgwfsSuper_t *)kzalloc(sizeof(MgwfsSuper_t), GFP_KERNEL); /* Allocate our super block memory*/
+	if ( !ourSuper )
+		return -ENOMEM;
+	sb->s_fs_info = ourSuper;
+	ourSuper->defaultAllocation = 128;		/* Assume a default allocation */
+	ourSuper->defaultCopies = 1;			/* Assume a default number of copies */
+	ret = parse_options(sb, data); 
+	flags = ourSuper->flags;
+	if ( ret )
 	{
 		pr_err("mgwfs_fill_super: Failed to parse options, error code: %d\n",
 			   ret);
 	}
-	else
+	if ( flags )
 	{
-		flags = ret;
-		if ( (flags & MGWFS_MNT_OPT_ANY_VERBOSE) )
-			pr_info("mgwfs_fill_super: After parse: sb=%p, sb->flags=0x%lX, flags=0x%X\n", sb, sb->s_flags, flags);
+		pr_info("mgwfs_fill_super(): s_blocksize=%lu, is_ro=%s, ourFlags=0x%X, copies=%d, allocation=%d\n"
+				,sb->s_blocksize
+				,(sb->s_flags&SB_RDONLY)?"Yes":"No"
+				,flags
+				,ourSuper->defaultCopies
+				,ourSuper->defaultAllocation
+				);
 	}
-	if ( (flags) )
-		pr_info("mgwfs_fill_super(): s_blocksize=%lu.\n", sb->s_blocksize);
-	if ( (ret=getOurSuper(sb, flags)) <= 0 )
+	if ( (ret=getOurSuper(sb)) <= 0 )
 	{
 		if ( !ret )
 			ret = -EINVAL;

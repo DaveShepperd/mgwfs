@@ -35,15 +35,17 @@ typedef struct
 	FsysRetPtr pointers[FSYS_MAX_ALTS][FSYS_MAX_FHPTRS]; /* retrieval pointers */
 } MgwfsInode_t;
 
-#define MGWFS_MNT_OPT_RO			1
-#define MGWFS_MNT_OPT_VERBOSE		2
-#define MGWFS_MNT_OPT_VERBOSE_HOME	4
-#define MGWFS_MNT_OPT_VERBOSE_HEADERS 8
-#define MGWFS_MNT_OPT_VERBOSE_DIR	16
-#define MGWFS_MNT_OPT_VERBOSE_READ	32
-#define MGWFS_MNT_OPT_VERBOSE_INODE	64
-#define MGWFS_MNT_OPT_VERBOSE_INDEX	128
-#define MGWFS_MNT_OPT_ANY_VERBOSE (1|2|4|8|16|32|64|128)
+#define MGWFS_MNT_OPT_ALLOCATION	1
+#define MGWFS_MNT_OPT_COPIES		2
+#define MGWFS_MNT_OPT_VERBOSE		4
+#define MGWFS_MNT_OPT_VERBOSE_HOME	8
+#define MGWFS_MNT_OPT_VERBOSE_HEADERS 16
+#define MGWFS_MNT_OPT_VERBOSE_DIR	32
+#define MGWFS_MNT_OPT_VERBOSE_READ	64
+#define MGWFS_MNT_OPT_VERBOSE_INODE	128
+#define MGWFS_MNT_OPT_VERBOSE_INDEX	256
+#define MGWFS_MNT_OPT_VERBOSE_FREE	512
+#define MGWFS_MNT_OPT_ANY_VERBOSE (4|8|16|32|64|128|256)
 
 typedef struct MgwfsSuper_t
 {
@@ -52,8 +54,14 @@ typedef struct MgwfsSuper_t
 	uint32_t baseSector;	/* sector offset to start of our fs if in a partition */
 	FsysHeader indexSysHdr;	/* copy of the file header of index.sys */
 	uint32_t *indexSys;		/* contents of index.sys */
+	int indexFHDirty;		/* flag indicating index file header is dirty */
+	int indexSysDirty;		/* flag indicating index.sys contents is dirty */
 	FsysHeader freeMapHdr;	/* copy of file header of freemap.sys */
 	FsysRetPtr *freeMap;	/* contents of freemap.sys */
+	int freeListFHDirty;	/* flag indicating freeMapHdr is dirty */
+	int freeListDirty;		/* flag indicating freelist contents is dirty */
+	int defaultAllocation;	/* Default number of sectors to allocate on file extend */
+	int defaultCopies;		/* Default number of copies to make of new files */
 	MgwfsBlock_t buffer;
 	uint32_t flags;			/* for now, just verbose flags (see MGWFS_MNT_OPT_VERBOSE_xxx flags above) */
 } MgwfsSuper_t;
@@ -61,6 +69,19 @@ typedef struct MgwfsSuper_t
 extern uint8_t* mgwfs_getSector(struct super_block *sb, MgwfsBlock_t *buffp, sector_t sector, int *numBytes);
 extern int mgwfs_getFileHeader(struct super_block *sb, const char *title, uint32_t fhID, uint32_t fileID, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp);
 extern int mgwfs_readFile(struct super_block *sb, const char *title, uint8_t *dst, int bytes, FsysRetPtr *retPtr, int squawk);
+
+typedef struct
+{
+	FsysRetPtr result;		/* newly formed selection */
+	FsysRetPtr hint;		/* hint of what to connect to if possible */
+	int currListAlloc;		/* maximum number of entries in list */
+	int updatedEntryIndex;	/* index of entry updated */
+	int addedEntryIndex;	/* index of entry added */
+} MgwfsFoundFreeList_t;
+
+extern void mgwfsDumpFreeList( const char *title, const FsysRetPtr *list );
+extern int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeList_t *stuff, int numSectors );
+extern int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeList_t *stuff, FsysRetPtr *retp);
 
 #if 0
 #define MGWFS_SB_FLAG_VERBOSE (1)

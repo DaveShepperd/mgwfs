@@ -262,6 +262,7 @@
 			<F N="dir.c"/>
 			<F N="dmpfs-mgwfs.c"/>
 			<F N="file.c"/>
+			<F N="freelist.c"/>
 			<F N="inode.c"/>
 			<F N="kmgwfs.c"/>
 			<F N="mkfs-mgwfs.c"/>

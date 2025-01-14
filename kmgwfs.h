@@ -34,13 +34,17 @@ void mgwfs_kill_superblock(struct super_block *sb);
 void mgwfs_destroy_inode(struct inode *inode);
 // void mgwfs_put_super(struct super_block *sb);
 
-//int mgwfs_create(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry,
-//                    umode_t mode, bool excl);
+int mgwfs_create(struct mnt_idmap *, struct inode *,struct dentry *, umode_t, bool);
+int mgwfs_atomic_open(struct inode *, struct dentry *, struct file *, unsigned open_flag, umode_t create_mode);
+int mgwfs_unlink(struct inode *,struct dentry *);
+/* int mgwfs_symlink(struct mnt_idmap *, struct inode *,struct dentry *, const char *); */
+int mgwfs_mkdir(struct mnt_idmap *, struct inode *,struct dentry *, umode_t);
+int mgwfs_rmdir(struct inode *,struct dentry *);
+/* int mgwfs_mknod(struct mnt_idmap *, struct inode *,struct dentry *, umode_t,dev_t); */
+int mgwfs_rename(struct mnt_idmap *, struct inode *, struct dentry *, struct inode *, struct dentry *, unsigned int);
 struct dentry *mgwfs_lookup(struct inode *parent_inode,
                                struct dentry *child_dentry,
                                unsigned int flags);
-//int mgwfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentry,
-//                   umode_t mode);
 
 int mgwfs_readdir(struct file *filp, struct dir_context *dirCtx /*void *dirent, filldir_t filldir*/);
 
@@ -48,8 +52,7 @@ ssize_t mgwfs_read(struct file * filp, char __user * buf, size_t len,
                       loff_t * ppos);
 loff_t mgwfs_llseek(struct file *filp, loff_t offset, int whence);
 
-//ssize_t mgwfs_write(struct file * filp, const char __user * buf, size_t len,
-//                       loff_t * ppos);
+ssize_t mgwfs_write(struct file * filp, const char __user * buf, size_t len, loff_t * ppos);
 
 extern struct kmem_cache *mgwfs_inode_cache;
 
@@ -63,51 +66,13 @@ static inline MgwfsInode_t *MGWFS_INODE(struct inode *inode) {
     return (MgwfsInode_t *)inode->i_private;
 }
 
-#if 0
-static inline uint64_t MGWFS_INODES_PER_BLOCK(struct super_block *sb) {
-    struct mgwfs_superblock *mgwfs_sb;
-    mgwfs_sb = MGWFS_SB(sb);
-    return MGWFS_INODES_PER_BLOCK_HSB(mgwfs_sb);
-}
-
-// Given the inode_no, calcuate which block in inode table contains the corresponding inode
-static inline uint64_t MGWFS_INODE_BLOCK_OFFSET(struct super_block *sb, uint64_t inode_no) {
-    struct mgwfs_superblock *mgwfs_sb;
-    mgwfs_sb = MGWFS_SB(sb);
-    return inode_no / MGWFS_INODES_PER_BLOCK_HSB(mgwfs_sb);
-}
-static inline uint64_t MGWFS_INODE_BYTE_OFFSET(struct super_block *sb, uint64_t inode_no) {
-    struct mgwfs_superblock *mgwfs_sb;
-    mgwfs_sb = MGWFS_SB(sb);
-    return (inode_no % MGWFS_INODES_PER_BLOCK_HSB(mgwfs_sb)) * sizeof(struct mgwfs_inode);
-}
-
-static inline uint64_t MGWFS_DIR_MAX_RECORD(struct super_block *sb) {
-    struct mgwfs_superblock *mgwfs_sb;
-    mgwfs_sb = MGWFS_SB(sb);
-    return mgwfs_sb->blocksize / sizeof(struct mgwfs_dir_record);
-}
-
-// From which block does data blocks start
-static inline uint64_t MGWFS_DATA_BLOCK_TABLE_START_BLOCK_NO(struct super_block *sb) {
-    struct mgwfs_superblock *mgwfs_sb;
-    mgwfs_sb = MGWFS_SB(sb);
-    return MGWFS_DATA_BLOCK_TABLE_START_BLOCK_NO_HSB(mgwfs_sb);
-}
-
 void mgwfs_save_sb(struct super_block *sb);
-#endif
 
 // functions to operate inode
 void mgwfs_fill_inode(struct super_block *sb, struct inode *inode, MgwfsInode_t *mgwfs_inode, const char *fName);
 int mgwfs_alloc_mgwfs_inode(struct super_block *sb, uint64_t *out_inode_no);
 MgwfsInode_t *mgwfs_get_mgwfs_inode(struct super_block *sb, uint32_t inode_no, int generation, const char *fileName );
-#if 0
-void mgwfs_save_mgwfs_inode(struct super_block *sb, MgwfsInode_t *inode);
-int mgwfs_add_dir_record(struct super_block *sb, struct inode *dir, struct dentry *dentry, struct inode *inode);
-int mgwfs_alloc_data_block(struct super_block *sb, uint64_t *out_data_block_no);
-int mgwfs_create_inode(struct inode *dir, struct dentry *dentry, umode_t mode);
-#endif
+
 int mgwfs_statfs(struct dentry *dirp, struct kstatfs *statp);
 
 #endif /*__KMGWFS_H__*/

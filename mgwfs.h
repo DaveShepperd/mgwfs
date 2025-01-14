@@ -77,11 +77,11 @@ typedef struct
 	int currListAlloc;		/* maximum number of entries in list */
 	int updatedEntryIndex;	/* index of entry updated */
 	int addedEntryIndex;	/* index of entry added */
-} MgwfsFoundFreeList_t;
+} MgwfsFoundFreeMap_t;
 
-extern void mgwfsDumpFreeList( const char *title, const FsysRetPtr *list );
-extern int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeList_t *stuff, int numSectors );
-extern int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeList_t *stuff, FsysRetPtr *retp);
+extern void mgwfsDumpFreeMap( const char *title, const FsysRetPtr *list );
+extern int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSectors );
+extern int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRetPtr *retp);
 
 #if 0
 #define MGWFS_SB_FLAG_VERBOSE (1)

@@ -422,3 +422,506 @@ struct dentry* mgwfs_lookup(struct inode *dir,
 		printk(KERN_WARNING "mgwfs_lookup(): No inode found for the filename: %s\n", child_dentry->d_name.name);
 	return NULL;
 }
+
+#if 0
+static int mgwfs_remove_from_dir(struct inode *dir, struct dentry *dentry)
+{
+    struct super_block *sb = dir->i_sb;
+    struct inode *inode = d_inode(dentry);
+    struct buffer_head *bh = NULL, *bh2 = NULL, *bh_prev = NULL;
+    MgwfsSuper_t *eblock = NULL;
+	MgwfsInode_t *ourDirInode;
+    int ret = 0, found = false;
+	uint8_t *dataPtr;
+	
+    /* Read parent directory index */
+	ourDirInode = MGWFS_INODE(dir);
+	dataPtr = (uint8_t *)ourDirInode->contentsPtr;
+	while ( dataPtr < dataPtr+ourDirInode->size )
+	{
+        if (!eblock->extents[ei].ee_start)
+            break;
+
+        for (bi = 0; bi < eblock->extents[ei].ee_len; bi++) {
+            bh2 = sb_bread(sb, eblock->extents[ei].ee_start + bi);
+            if (!bh2) {
+                ret = -EIO;
+                goto release_bh;
+            }
+            dblock = (struct mgwfs_dir_block *) bh2->b_data;
+            if (!dblock->files[0].inode)
+                break;
+
+            if (found) {
+                memmove(dblock_prev->files + MGWFS_FILES_PER_BLOCK - 1,
+                        dblock->files, sizeof(struct mgwfs_file));
+                brelse(bh_prev);
+
+                memmove(dblock->files, dblock->files + 1,
+                        (MGWFS_FILES_PER_BLOCK - 1) *
+                            sizeof(struct mgwfs_file));
+                memset(dblock->files + MGWFS_FILES_PER_BLOCK - 1, 0,
+                       sizeof(struct mgwfs_file));
+                mark_buffer_dirty(bh2);
+
+                bh_prev = bh2;
+                dblock_prev = dblock;
+                continue;
+            }
+            /* Remove file from parent directory */
+            for (fi = 0; fi < MGWFS_FILES_PER_BLOCK; fi++) {
+                if (dblock->files[fi].inode == inode->i_ino &&
+                    !strcmp(dblock->files[fi].filename, dentry->d_name.name)) {
+                    found = true;
+                    if (fi != MGWFS_FILES_PER_BLOCK - 1) {
+                        memmove(dblock->files + fi, dblock->files + fi + 1,
+                                (MGWFS_FILES_PER_BLOCK - fi - 1) *
+                                    sizeof(struct mgwfs_file));
+                    }
+                    memset(dblock->files + MGWFS_FILES_PER_BLOCK - 1, 0,
+                           sizeof(struct mgwfs_file));
+                    mark_buffer_dirty(bh2);
+                    bh_prev = bh2;
+                    dblock_prev = dblock;
+                    break;
+                }
+            }
+            if (!found)
+                brelse(bh2);
+        }
+    }
+    if (found) {
+        if (bh_prev)
+            brelse(bh_prev);
+        eblock->nr_files--;
+        mark_buffer_dirty(bh);
+    }
+release_bh:
+    brelse(bh);
+    return ret;
+}
+
+/* Remove a link for a file including the reference in the parent directory.
+ * If link count is 0, destroy file in this way:
+ *   - remove the file from its parent directory.
+ *   - cleanup blocks containing data
+ *   - cleanup file index block
+ *   - cleanup inode
+ */
+static int mgwfs_unlink(struct inode *dir, struct dentry *dentry)
+{
+    struct super_block *sb = dir->i_sb;
+    struct mgwfs_sb_info *sbi = MGWFS_SB(sb);
+    struct inode *inode = d_inode(dentry);
+    struct buffer_head *bh = NULL, *bh2 = NULL;
+    struct mgwfs_file_ei_block *file_block = NULL;
+#if MGWFS_AT_LEAST(6, 6, 0) && MGWFS_LESS_EQUAL(6, 7, 0)
+    struct timespec64 cur_time;
+#endif
+    int ei = 0, bi = 0;
+    int ret = 0;
+
+    uint32_t ino = inode->i_ino;
+    uint32_t bno = 0;
+
+    ret = mgwfs_remove_from_dir(dir, dentry);
+    if (ret != 0)
+        return ret;
+
+    if (S_ISLNK(inode->i_mode))
+        goto clean_inode;
+
+        /* Update inode stats */
+#if MGWFS_AT_LEAST(6, 7, 0)
+    simple_inode_init_ts(dir);
+#elif MGWFS_AT_LEAST(6, 6, 0)
+    cur_time = current_time(dir);
+    dir->i_mtime = dir->i_atime = cur_time;
+    inode_set_ctime_to_ts(dir, cur_time);
+#else
+    dir->i_mtime = dir->i_atime = dir->i_ctime = current_time(dir);
+#endif
+
+    if (S_ISDIR(inode->i_mode)) {
+        drop_nlink(dir);
+        drop_nlink(inode);
+    }
+    mark_inode_dirty(dir);
+
+    if (inode->i_nlink > 1) {
+        inode_dec_link_count(inode);
+        return ret;
+    }
+
+    /* Cleans up pointed blocks when unlinking a file. If reading the index
+     * block fails, the inode is cleaned up regardless, resulting in the
+     * permanent loss of this file's blocks. If scrubbing a data block fails,
+     * do not terminate the operation (as it is already too late); instead,
+     * release the block and proceed.
+     */
+    bno = MGWFS_INODE(inode)->ei_block;
+    bh = sb_bread(sb, bno);
+    if (!bh)
+        goto clean_inode;
+    file_block = (struct mgwfs_file_ei_block *) bh->b_data;
+    if (S_ISDIR(inode->i_mode))
+        goto scrub;
+
+    for (ei = 0; ei < MGWFS_MAX_EXTENTS; ei++) {
+        char *block;
+
+        if (!file_block->extents[ei].ee_start)
+            break;
+
+        put_blocks(sbi, file_block->extents[ei].ee_start,
+                   file_block->extents[ei].ee_len);
+
+        /* Scrub the extent */
+        for (bi = 0; bi < file_block->extents[ei].ee_len; bi++) {
+            bh2 = sb_bread(sb, file_block->extents[ei].ee_start + bi);
+            if (!bh2)
+                continue;
+            block = (char *) bh2->b_data;
+            memset(block, 0, MGWFS_BLOCK_SIZE);
+            mark_buffer_dirty(bh2);
+            brelse(bh2);
+        }
+    }
+
+scrub:
+    /* Scrub index block */
+    memset(file_block, 0, MGWFS_BLOCK_SIZE);
+    mark_buffer_dirty(bh);
+    brelse(bh);
+
+clean_inode:
+    /* Cleanup inode and mark dirty */
+    inode->i_blocks = 0;
+    MGWFS_INODE(inode)->ei_block = 0;
+    inode->i_size = 0;
+    i_uid_write(inode, 0);
+    i_gid_write(inode, 0);
+
+#if MGWFS_AT_LEAST(6, 7, 0)
+    inode_set_mtime(inode, 0, 0);
+    inode_set_atime(inode, 0, 0);
+    inode_set_ctime(inode, 0, 0);
+#elif MGWFS_AT_LEAST(6, 6, 0)
+    inode->i_mtime.tv_sec = inode->i_atime.tv_sec = 0;
+    inode_set_ctime(inode, 0, 0);
+#else
+    inode->i_ctime.tv_sec = inode->i_mtime.tv_sec = inode->i_atime.tv_sec = 0;
+#endif
+
+    inode_dec_link_count(inode);
+
+    /* Free inode and index block from bitmap */
+    if (!S_ISLNK(inode->i_mode))
+        put_blocks(sbi, bno, 1);
+    inode->i_mode = 0;
+    put_inode(sbi, ino);
+
+    return ret;
+}
+
+#if MGWFS_AT_LEAST(6, 3, 0)
+static int mgwfs_rename(struct mnt_idmap *id,
+                           struct inode *old_dir,
+                           struct dentry *old_dentry,
+                           struct inode *new_dir,
+                           struct dentry *new_dentry,
+                           unsigned int flags)
+#elif MGWFS_AT_LEAST(5, 12, 0)
+static int mgwfs_rename(struct user_namespace *ns,
+                           struct inode *old_dir,
+                           struct dentry *old_dentry,
+                           struct inode *new_dir,
+                           struct dentry *new_dentry,
+                           unsigned int flags)
+#else
+static int mgwfs_rename(struct inode *old_dir,
+                           struct dentry *old_dentry,
+                           struct inode *new_dir,
+                           struct dentry *new_dentry,
+                           unsigned int flags)
+#endif
+{
+    struct super_block *sb = old_dir->i_sb;
+    struct mgwfs_inode_info *ci_new = MGWFS_INODE(new_dir);
+    struct inode *src = d_inode(old_dentry);
+    struct buffer_head *bh_new = NULL, *bh2 = NULL;
+    struct mgwfs_file_ei_block *eblock_new = NULL;
+    struct mgwfs_dir_block *dblock = NULL;
+
+#if MGWFS_AT_LEAST(6, 6, 0) && MGWFS_LESS_EQUAL(6, 7, 0)
+    struct timespec64 cur_time;
+#endif
+
+    int new_pos = -1, ret = 0;
+    int ei = 0, bi = 0, fi = 0, bno = 0;
+
+    /* fail with these unsupported flags */
+    if (flags & (RENAME_EXCHANGE | RENAME_WHITEOUT))
+        return -EINVAL;
+
+    /* Check if filename is not too long */
+    if (strlen(new_dentry->d_name.name) > MGWFS_FILENAME_LEN)
+        return -ENAMETOOLONG;
+
+    /* Fail if new_dentry exists or if new_dir is full */
+    bh_new = sb_bread(sb, ci_new->ei_block);
+    if (!bh_new)
+        return -EIO;
+
+    eblock_new = (struct mgwfs_file_ei_block *) bh_new->b_data;
+    for (ei = 0; new_pos < 0 && ei < MGWFS_MAX_EXTENTS; ei++) {
+        if (!eblock_new->extents[ei].ee_start)
+            break;
+
+        for (bi = 0; new_pos < 0 && bi < eblock_new->extents[ei].ee_len; bi++) {
+            bh2 = sb_bread(sb, eblock_new->extents[ei].ee_start + bi);
+            if (!bh2) {
+                ret = -EIO;
+                goto release_new;
+            }
+
+            dblock = (struct mgwfs_dir_block *) bh2->b_data;
+            for (fi = 0; fi < MGWFS_FILES_PER_BLOCK; fi++) {
+                if (new_dir == old_dir) {
+                    if (!strncmp(dblock->files[fi].filename,
+                                 old_dentry->d_name.name,
+                                 MGWFS_FILENAME_LEN)) {
+                        strncpy(dblock->files[fi].filename,
+                                new_dentry->d_name.name, MGWFS_FILENAME_LEN);
+                        mark_buffer_dirty(bh2);
+                        brelse(bh2);
+                        goto release_new;
+                    }
+                }
+                if (!strncmp(dblock->files[fi].filename,
+                             new_dentry->d_name.name, MGWFS_FILENAME_LEN)) {
+                    brelse(bh2);
+                    ret = -EEXIST;
+                    goto release_new;
+                }
+                if (new_pos < 0 && !dblock->files[fi].inode) {
+                    new_pos = fi;
+                    break;
+                }
+            }
+
+            brelse(bh2);
+        }
+    }
+
+    /* If new directory is full, fail */
+    if (new_pos < 0 && eblock_new->nr_files == MGWFS_FILES_PER_EXT) {
+        ret = -EMLINK;
+        goto release_new;
+    }
+
+    /* insert in new parent directory */
+    /* Get new freeblocks for extent if needed*/
+    if (new_pos < 0) {
+        bno = get_free_blocks(sb, 8);
+        if (!bno) {
+            ret = -ENOSPC;
+            goto release_new;
+        }
+        eblock_new->extents[ei].ee_start = bno;
+        eblock_new->extents[ei].ee_len = 8;
+        eblock_new->extents[ei].ee_block =
+            ei ? eblock_new->extents[ei - 1].ee_block +
+                     eblock_new->extents[ei - 1].ee_len
+               : 0;
+        bh2 = sb_bread(sb, eblock_new->extents[ei].ee_start + 0);
+        if (!bh2) {
+            ret = -EIO;
+            goto put_block;
+        }
+        dblock = (struct mgwfs_dir_block *) bh2->b_data;
+        mark_buffer_dirty(bh_new);
+        new_pos = 0;
+    }
+    dblock->files[new_pos].inode = src->i_ino;
+    strncpy(dblock->files[new_pos].filename, new_dentry->d_name.name,
+            MGWFS_FILENAME_LEN);
+    mark_buffer_dirty(bh2);
+    brelse(bh2);
+
+    /* Update new parent inode metadata */
+#if MGWFS_AT_LEAST(6, 7, 0)
+    simple_inode_init_ts(new_dir);
+#elif MGWFS_AT_LEAST(6, 6, 0)
+    cur_time = current_time(new_dir);
+    new_dir->i_atime = new_dir->i_mtime = cur_time;
+    inode_set_ctime_to_ts(new_dir, cur_time);
+#else
+    new_dir->i_atime = new_dir->i_ctime = new_dir->i_mtime =
+        current_time(new_dir);
+#endif
+
+    if (S_ISDIR(src->i_mode))
+        inc_nlink(new_dir);
+    mark_inode_dirty(new_dir);
+
+    /* remove target from old parent directory */
+    ret = mgwfs_remove_from_dir(old_dir, old_dentry);
+    if (ret != 0)
+        goto release_new;
+
+        /* Update old parent inode metadata */
+#if MGWFS_AT_LEAST(6, 7, 0)
+    simple_inode_init_ts(old_dir);
+#elif MGWFS_AT_LEAST(6, 6, 0)
+    cur_time = current_time(old_dir);
+    old_dir->i_atime = old_dir->i_mtime = cur_time;
+    inode_set_ctime_to_ts(old_dir, cur_time);
+#else
+    old_dir->i_atime = old_dir->i_ctime = old_dir->i_mtime =
+        current_time(old_dir);
+#endif
+
+    if (S_ISDIR(src->i_mode))
+        drop_nlink(old_dir);
+    mark_inode_dirty(old_dir);
+
+    return ret;
+
+put_block:
+    if (eblock_new->extents[ei].ee_start) {
+        put_blocks(MGWFS_SB(sb), eblock_new->extents[ei].ee_start,
+                   eblock_new->extents[ei].ee_len);
+        memset(&eblock_new->extents[ei], 0, sizeof(struct mgwfs_extent));
+    }
+release_new:
+    brelse(bh_new);
+    return ret;
+}
+
+#if MGWFS_AT_LEAST(6, 3, 0)
+static int mgwfs_mkdir(struct mnt_idmap *id,
+                          struct inode *dir,
+                          struct dentry *dentry,
+                          umode_t mode)
+{
+    return mgwfs_create(id, dir, dentry, mode | S_IFDIR, 0);
+}
+#elif MGWFS_AT_LEAST(5, 12, 0)
+static int mgwfs_mkdir(struct user_namespace *ns,
+                          struct inode *dir,
+                          struct dentry *dentry,
+                          umode_t mode)
+{
+    return mgwfs_create(ns, dir, dentry, mode | S_IFDIR, 0);
+}
+#else
+static int mgwfs_mkdir(struct inode *dir,
+                          struct dentry *dentry,
+                          umode_t mode)
+{
+    return mgwfs_create(dir, dentry, mode | S_IFDIR, 0);
+}
+#endif
+
+static int mgwfs_rmdir(struct inode *dir, struct dentry *dentry)
+{
+    struct super_block *sb = dir->i_sb;
+    struct inode *inode = d_inode(dentry);
+    struct buffer_head *bh;
+    struct mgwfs_file_ei_block *eblock;
+
+    /* If the directory is not empty, fail */
+    if (inode->i_nlink > 2)
+        return -ENOTEMPTY;
+
+    bh = sb_bread(sb, MGWFS_INODE(inode)->ei_block);
+    if (!bh)
+        return -EIO;
+
+    eblock = (struct mgwfs_file_ei_block *) bh->b_data;
+    if (eblock->nr_files != 0) {
+        brelse(bh);
+        return -ENOTEMPTY;
+    }
+    brelse(bh);
+
+    /* Remove directory with unlink */
+    return mgwfs_unlink(dir, dentry);
+}
+
+static int mgwfs_link(struct dentry *old_dentry,
+                         struct inode *dir,
+                         struct dentry *dentry)
+{
+    struct inode *inode = d_inode(old_dentry);
+    struct super_block *sb = inode->i_sb;
+    struct mgwfs_inode_info *ci_dir = MGWFS_INODE(dir);
+    struct mgwfs_file_ei_block *eblock = NULL;
+    struct mgwfs_dir_block *dblock;
+    struct buffer_head *bh = NULL, *bh2 = NULL;
+    int ret = 0, alloc = false, bno = 0;
+    int ei = 0, bi = 0, fi = 0;
+
+    bh = sb_bread(sb, ci_dir->ei_block);
+    if (!bh)
+        return -EIO;
+
+    eblock = (struct mgwfs_file_ei_block *) bh->b_data;
+    if (eblock->nr_files == MGWFS_MAX_SUBFILES) {
+        ret = -EMLINK;
+        printk(KERN_INFO "directory is full");
+        goto end;
+    }
+
+    ei = eblock->nr_files / MGWFS_FILES_PER_EXT;
+    bi = eblock->nr_files % MGWFS_FILES_PER_EXT / MGWFS_FILES_PER_BLOCK;
+    fi = eblock->nr_files % MGWFS_FILES_PER_BLOCK;
+
+    if (eblock->extents[ei].ee_start == 0) {
+        bno = get_free_blocks(sb, 8);
+        if (!bno) {
+            ret = -ENOSPC;
+            goto end;
+        }
+        eblock->extents[ei].ee_start = bno;
+        eblock->extents[ei].ee_len = 8;
+        eblock->extents[ei].ee_block = ei ? eblock->extents[ei - 1].ee_block +
+                                                eblock->extents[ei - 1].ee_len
+                                          : 0;
+        alloc = true;
+    }
+    bh2 = sb_bread(sb, eblock->extents[ei].ee_start + bi);
+    if (!bh2) {
+        ret = -EIO;
+        goto put_block;
+    }
+    dblock = (struct mgwfs_dir_block *) bh2->b_data;
+
+    dblock->files[fi].inode = inode->i_ino;
+    strncpy(dblock->files[fi].filename, dentry->d_name.name,
+            MGWFS_FILENAME_LEN);
+
+    eblock->nr_files++;
+    mark_buffer_dirty(bh2);
+    mark_buffer_dirty(bh);
+    brelse(bh2);
+    brelse(bh);
+
+    inode_inc_link_count(inode);
+    ihold(inode);
+    d_instantiate(dentry, inode);
+    return ret;
+
+put_block:
+    if (alloc && eblock->extents[ei].ee_start) {
+        put_blocks(MGWFS_SB(sb), eblock->extents[ei].ee_start,
+                   eblock->extents[ei].ee_len);
+        memset(&eblock->extents[ei], 0, sizeof(struct mgwfs_extent));
+    }
+end:
+    brelse(bh);
+    return ret;
+}
+
+#endif	/* read/write */

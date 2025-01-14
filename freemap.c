@@ -1,8 +1,8 @@
-#ifndef STANDALONE_FREELIST
-	#define STANDALONE_FREELIST (0)
+#ifndef STANDALONE_FREEMAP
+	#define STANDALONE_FREEMAP (0)
 #endif
 
-#if !STANDALONE_FREELIST
+#if !STANDALONE_FREEMAP
 
 	#include "kmgwfs.h"
 
@@ -25,9 +25,9 @@ typedef uint32_t sector_t;
 	#define pr_info printf
 	#define pr_err  printf
 
-#endif	/* STANDALONE_FREELIST */
+#endif	/* STANDALONE_FREEMAP */
 
-void mgwfsDumpFreeList(const char *title, const FsysRetPtr *list)
+void mgwfsDumpFreeMap(const char *title, const FsysRetPtr *list)
 {
 	int ii = 0;
 	if ( title )
@@ -41,7 +41,7 @@ void mgwfsDumpFreeList(const char *title, const FsysRetPtr *list)
 	}
 }
 
-int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeList_t *stuff, int numSectors)
+int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSectors)
 {
 	if ( stuff )
 	{
@@ -163,7 +163,7 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeList_t *stuff, int numSe
 
 #define HANDLE_FREE_OVERLAPS (0)	/* Write this code someday */
 
-int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeList_t *stuff, FsysRetPtr *retp)
+int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRetPtr *retp)
 {
 	if ( stuff && retp )
 	{
@@ -266,8 +266,8 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeList_t *stuff, FsysRe
 	return 0;
 }
 
-#if STANDALONE_FREELIST
-static FsysRetPtr sampleFreeList[] =
+#if STANDALONE_FREEMAP
+static FsysRetPtr sampleFreeMap[] =
 {
 	{ 0x1000, 10 },
 	{ 0x1020, 20 },
@@ -296,7 +296,7 @@ int main(int argc, char **argv)
 	int numSectors, allocated;
 	char *endp;
 	FsysRetPtr retSec;
-	MgwfsFoundFreeList_t found;
+	MgwfsFoundFreeMap_t found;
 	MgwfsSuper_t super;
 
 	memset(&found, 0, sizeof(found));
@@ -350,16 +350,16 @@ int main(int argc, char **argv)
 		fprintf(stderr, "Bad argument for -n: '%s'\n", argv[optind]);
 		return 1;
 	}
-	found.currListAlloc = sizeof(sampleFreeList) / sizeof(FsysRetPtr);
-	super.freeMap = sampleFreeList;
+	found.currListAlloc = sizeof(sampleFreeMap) / sizeof(FsysRetPtr);
+	super.freeMap = sampleFreeMap;
 	if ( super.flags )
-		mgwfsDumpFreeList("Before:", sampleFreeList);
+		mgwfsDumpFreeMap("Before:", sampleFreeMap);
 	allocated = 0;
 	if ( retSec.start )
 	{
 		mgwfsFreeSectors(&super, &found, &retSec);
 		if ( super.flags )
-			mgwfsDumpFreeList("After Free:", sampleFreeList);
+			mgwfsDumpFreeMap("After Free:", sampleFreeMap);
 	}
 	while ( allocated < numSectors )
 	{
@@ -389,7 +389,7 @@ int main(int argc, char **argv)
 	if ( super.flags )
 	{
 		printf("Total allocated: %d\n", allocated);
-		mgwfsDumpFreeList("After:", sampleFreeList);
+		mgwfsDumpFreeMap("After:", sampleFreeMap);
 	}
 	return 0;
 }

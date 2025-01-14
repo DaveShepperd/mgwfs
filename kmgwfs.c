@@ -22,6 +22,8 @@ const struct inode_operations mgwfs_inode_ops = {
 #if 0
     .create = mgwfs_create,
     .mkdir = mgwfs_mkdir,
+	.unlink = mgwfs_unlink,
+	.rmdir = mgwfs_rmdir,
 #endif
     .lookup = mgwfs_lookup,
 };

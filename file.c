@@ -33,8 +33,8 @@ ssize_t mgwfs_read(struct file *filp, char __user *buf, size_t len,
 	{
 		return 0;
 	}
-	relativeSector = *ppos / BYTES_PER_SECTOR;        /* starting sector */
-	sectorOffset = *ppos % BYTES_PER_SECTOR;  /* offset into first sector */
+	relativeSector = *ppos / BYTES_PER_SECTOR;      /* starting sector */
+	sectorOffset = *ppos % BYTES_PER_SECTOR;		/* offset into first sector */
 	retIdx = 0;
 	retPtr = ourInode->pointers[0];         /* pointer to list of retrieval pointers */
 	if ( verbose )
@@ -67,7 +67,10 @@ ssize_t mgwfs_read(struct file *filp, char __user *buf, size_t len,
 	while ( bytesRead < len && retIdx < FSYS_MAX_FHPTRS )
 	{
 		char *bufPointer;
-		int numBytes, bytesToCopy;
+		int bytesToCopy;
+#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
+		int numBytes;
+#endif
 
 		if ( relativeSector >= retPtr->nblocks )
 		{
@@ -82,7 +85,11 @@ ssize_t mgwfs_read(struct file *filp, char __user *buf, size_t len,
 			continue;
 		}
 		actualSector = retPtr->start + relativeSector;
+#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 		bufPointer = (char *)mgwfs_getSector(sb, &ourInode->buffer, actualSector, &numBytes);
+#else
+		bufPointer = (char *)mgwfs_getSector(sb, &ourInode->buffer, actualSector);
+#endif
 		if ( !bufPointer )
 		{
 			printk(KERN_ERR "mgwfs_read(): File '%s': Failed to read sector 0x%08llX\n",
@@ -91,6 +98,7 @@ ssize_t mgwfs_read(struct file *filp, char __user *buf, size_t len,
 		}
 		bufPointer += sectorOffset;
 		bytesToCopy = len - bytesRead;         /* Assume to read the max */
+#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 		if ( bytesToCopy > numBytes )       /* but clip to amount read by mgwfs_getSector() */
 			bytesToCopy = numBytes;
 		if ( relativeSector + bytesToCopy / BYTES_PER_SECTOR > retPtr->nblocks )
@@ -98,18 +106,32 @@ ssize_t mgwfs_read(struct file *filp, char __user *buf, size_t len,
 			/* We're to read too much off this retrieval pointer, clip the count */
 			bytesToCopy = (retPtr->nblocks - relativeSector) * BYTES_PER_SECTOR;
 		}
+#else
+		if ( bytesToCopy > BYTES_PER_SECTOR )
+			bytesToCopy = BYTES_PER_SECTOR;
+#endif
 		if ( bytesToCopy + *ppos > ourInode->size ) /* then clip again if to read beyond EOF */
 			bytesToCopy = ourInode->size - *ppos;
 		if ( bytesToCopy <= 0 )
 		{
+#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 			pr_err("mgwfs_read(): file '%s' computed bytesToCopy as 0. len=%ld, bytesRead=%d, numBytes=%d, relativeSector=%d, nblocks=%d, *ppos=%lld, size=%d\n",
 				   ourFileName, len, bytesRead, numBytes, relativeSector, retPtr->nblocks, *ppos, ourInode->size);
+#else
+			pr_err("mgwfs_read(): file '%s' computed bytesToCopy as 0. len=%ld, bytesRead=%d, relativeSector=%d, nblocks=%d, *ppos=%lld, size=%d\n",
+				   ourFileName, len, bytesRead, relativeSector, retPtr->nblocks, *ppos, ourInode->size);
+#endif
 			break;
 		}
 		if ( verbose )
 		{
+#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 			pr_info("mgwfs_read(): File '%s'. Read sector 0x%08llX. numBytes=%d. About to copy %d bytes to user buffer.\n",
 					ourFileName, actualSector, numBytes, bytesToCopy);
+#else
+			pr_info("mgwfs_read(): File '%s'. Read sector 0x%08llX. About to copy %d bytes to user buffer.\n",
+					ourFileName, actualSector, bytesToCopy);
+#endif
 		}
 		if ( copy_to_user(buf, bufPointer, bytesToCopy) )
 		{
@@ -121,8 +143,13 @@ ssize_t mgwfs_read(struct file *filp, char __user *buf, size_t len,
 		*ppos += bytesToCopy;
 		if ( *ppos >= ourInode->size )
 			break;
+#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 		relativeSector += bytesToCopy / BYTES_PER_SECTOR;
 		sectorOffset = bytesToCopy % BYTES_PER_SECTOR;
+#else
+		++relativeSector;
+		sectorOffset = 0;
+#endif
 	}
 	return bytesRead;
 }

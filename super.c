@@ -56,14 +56,8 @@ static int parse_options(struct super_block *sb, char *options)
 	return 0;
 }
 
-
-#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 uint8_t *mgwfs_getSector(struct super_block *sb, MgwfsBlock_t *buffP, sector_t sector, int *numBytes)
-#else
-uint8_t *mgwfs_getSector(struct super_block *sb, MgwfsBlock_t *buffP, sector_t sector)
-#endif
 {
-#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 	int bufOffset;
 	int sectorsPerBlock = sb->s_blocksize/BYTES_PER_SECTOR;
 	sector_t block = sector / sectorsPerBlock;
@@ -81,54 +75,69 @@ uint8_t *mgwfs_getSector(struct super_block *sb, MgwfsBlock_t *buffP, sector_t s
 		buffP->block = block;
 	}
 	bufOffset = (sector%sectorsPerBlock)*BYTES_PER_SECTOR;
+	buffP->buffOffset = bufOffset;
 	if ( numBytes )
 		*numBytes = sb->s_blocksize - bufOffset;
 	return buffP->bh->b_data + bufOffset;
-#else
-	if ( buffP )
-	{
-		MgwfsSuper_t *ourSuper = MGWFS_SB(sb);
-		if ( ourSuper->flags )
-		{
-			pr_info("mgwfs_getSector(): buffP=%p, sector=%lld, buffP->bh=%p, buffP->block=%lld\n",
-					(void *)buffP, sector, buffP->bh, buffP->block);
-		}
-		if ( !buffP->bh || buffP->block != sector )
-		{
-			if ( buffP->bh )
-				brelse(buffP->bh);
-			if ( ourSuper->flags )
-			{
-				pr_info("mgwfs_getSector(): calling sb_bread(%p,%lld)\n",
-						(void *)sb, sector);
-			}
-			if ( !(buffP->bh = sb_bread(sb,sector)) )
-			{
-				buffP->block = 0;
-				return NULL;
-			}
-			buffP->block = sector;
-			if ( ourSuper->flags )
-			{
-				pr_info("mgwfs_getSector(): sb_bread(%p,%lld) returned %p\n",
-						(void *)sb, sector, buffP->bh);
-			}
-		}
-		return buffP->bh->b_data;
-	}
-	return NULL;
-#endif
 }
 
-void mgwfs_writebackSector(MgwfsBlock_t *buffp)
+/*
+ * I wish there was a better way to do this, but it looks like all writes
+ * of single sectors have to be done via a read-modify-write cycle. No matter, nobody is
+ * ever going to use this driver so it doesn't have to be fast or efficient.
+ */
+void mgwfs_putSector(struct super_block *sb, const uint8_t *ptr, sector_t sector)
 {
-	if ( buffp && buffp->bh )
+	if ( sb && ptr && sector )
 	{
-		mark_buffer_dirty(buffp->bh);
-		sync_dirty_buffer(buffp->bh);
-		brelse(buffp->bh);
-		buffp->bh = NULL;
-		buffp->block = 0;
+		MgwfsBlock_t buffh;
+		uint8_t *buff;
+		buffh.bh = NULL;
+		buffh.block = 0;
+		buff = mgwfs_getSector(sb,&buffh,sector,NULL);
+		if ( buff )
+		{
+			memcpy(buff, ptr, BYTES_PER_SECTOR);
+			mark_buffer_dirty(buffh.bh);
+			sync_dirty_buffer(buffh.bh);
+			brelse(buffh.bh);
+		}
+	}
+}
+
+void mgwfs_putSectors(struct super_block *sb, const uint8_t *ptr, sector_t stSector, int numSectors)
+{
+	if ( sb && ptr && stSector && numSectors )
+	{
+		int bytesLeft, bytesToWrite;
+		int sectorsPerBlock = sb->s_blocksize/BYTES_PER_SECTOR;
+		sector_t block = stSector / sectorsPerBlock;
+		MgwfsBlock_t buffh;
+		uint8_t *buff;
+
+		bytesToWrite = numSectors*BYTES_PER_SECTOR;		/* Total number of bytes to write */
+		while ( bytesToWrite > 0 )
+		{
+			buffh.bh = NULL;					/* Assume empty */
+			buffh.block = 0;
+			bytesLeft = 0;
+			buff = mgwfs_getSector(sb,&buffh,block,&bytesLeft);
+			if ( !buff )
+			{
+				pr_err("mgwfs_putSectors(): Failed to get sector %lld to write %d sectors.\n", stSector, numSectors);
+				break;
+			}
+			bytesLeft += BYTES_PER_SECTOR;		/* Always at least one sector's worth */
+			if ( bytesLeft > bytesToWrite )
+				bytesLeft = bytesToWrite;
+			memcpy(buff, ptr, bytesLeft);
+			mark_buffer_dirty(buffh.bh);
+			sync_dirty_buffer(buffh.bh);
+			brelse(buffh.bh);
+			ptr += bytesLeft;
+			bytesToWrite -= bytesLeft;
+			block += bytesLeft/BYTES_PER_SECTOR;
+		}
 	}
 }
 
@@ -247,12 +256,12 @@ int mgwfs_getFileHeader(struct super_block *sb, const char *title, uint32_t head
 		sector = lbas[ii] + ourSuper->baseSector;
 		if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_HEADERS) )
 			pr_info("mgwfs_getFileHeader(): Attempting to read file header for fid %d: '%s' at sector 0x%llX\n", fileID, title, sector);
-#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 		bufPtr = mgwfs_getSector(sb,&ourSuper->buffer,sector,NULL);
-#else
-		bufPtr = mgwfs_getSector(sb,&ourSuper->buffer,sector);
-#endif
-		BUG_ON(!bufPtr);
+		if ( !bufPtr )
+		{
+			pr_err("mgwfs_getFileHeader(): File %d: %s: Sector at 0x%llX cannot be read. mgwfs_getSector() return NULL.\n", fileID, title, sector);
+			continue;
+		}
 		tmpFhp = (FsysHeader *)bufPtr;
 		if ( tmpFhp->id != headerID )
 		{
@@ -303,15 +312,66 @@ int mgwfs_getFileHeader(struct super_block *sb, const char *title, uint32_t head
 	return ret;
 }
 
+#if 0
+int mgwfs_extendFile(struct super_block *sb, int sectors, FsysHeader *fhp)
+{
+	MgwfsSuper_t *ourSuper = MGWFS_SB(sb);
+	if ( !sectors )
+		sectors = ourSuper->defaultAllocation;
+	if ( fhp->size+BYTES_PER_SECTOR-1 > sectors*BYTES_PER_SECTOR )
+		sectors = (fhp->size+BYTES_PER_SECTOR-1)/BYTES_PER_SECTOR;
+}
+
+static uint32_t getNewHeaderSector(struct super_block *sb, int idx)
+{
+	MgwfsSuper_t *ourSuper = MGWFS_SB(sb);
+	MgwfsFoundFreeMap_t freeM;
+	FsysRetPtr *retp;
+	int ii;
+	
+	memset(&freeM,0,sizeof(freeM));
+	retp = ourSuper->indexSysHdr.pointers[idx];
+}
+
+int mgwfs_allocFileHeader(struct super_block *sb, uint32_t *fid, FsysHeader *fhp)
+{
+	MgwfsSuper_t *ourSuper = MGWFS_SB(sb);
+	uint32_t *idp, *lastEntry, *maxEntry;
+	
+	idp = ourSuper->indexSys;
+	lastEntry = idp+(ourSuper->indexSysHdr.size+sizeof(uint32_t)-1)/sizeof(uint32_t);
+	maxEntry = idp + (ourSuper->indexSysHdr.clusters*BYTES_PER_SECTOR)/sizeof(uint32_t);
+	idp += 4;		/* Skip checking the first 4 items */
+	for (; idp < lastEntry; ++idp )
+	{
+		/* Look through index.sys for an unused entry */
+		if ( (*idp & FSYS_EMPTYLBA_BIT) )
+			break;
+	}
+	if ( idp == maxEntry )
+	{
+		*fid = 0;	
+		pr_info("mgwfs(): No room for anymore fileheaders. All %ld used\n", idp-ourSuper->indexSys );
+		return ENOSPC;
+	}
+	if ( idp >= lastEntry )
+	{
+		ourSuper->indexSysHdr.size += sizeof(uint32_t);
+		ourSuper->indexFHDirty = true;
+	}
+	*fid = idp-ourSuper->indexSys;
+	{
+	}
+}
+#endif
+
 int mgwfs_readFile(struct super_block *sb, const char *title, uint8_t *dst, int bytes, FsysRetPtr *retPtr, int squawk)
 {
 	MgwfsSuper_t *ourSuper = sb->s_fs_info;
 	sector_t sector;
 	int sectorIdx;
 	int ptrIdx, retSize;
-#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 	int bytesInBuffer;
-#endif
 	uint8_t *bufPointer;
 	ssize_t limit;
 	
@@ -337,41 +397,24 @@ int mgwfs_readFile(struct super_block *sb, const char *title, uint8_t *dst, int 
 			return retSize ? retSize : -1;
 		}
 		sector = retPtr->start + sectorIdx;
-#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 		bufPointer = mgwfs_getSector(sb,&ourSuper->buffer,sector,&bytesInBuffer);
-#else
-		bufPointer = mgwfs_getSector(sb,&ourSuper->buffer,sector);
-#endif
 		BUG_ON(!bufPointer);
-#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 		limit = bytesInBuffer;
 		if ( sectorIdx + limit/BYTES_PER_SECTOR > retPtr->nblocks )
 			limit = (retPtr->nblocks-sectorIdx)*BYTES_PER_SECTOR;
-#else
-		limit = BYTES_PER_SECTOR;
-#endif
 		if ( limit > bytes - retSize )
 			limit = bytes - retSize;
 		memcpy(dst, bufPointer, limit);
 		if ( squawk && (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_READ) )
 		{
 			uint32_t *ip = (uint32_t *)bufPointer;
-#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 			pr_info("mgwfs_readfile(): mgwfs_getSector(,0x%llX,) returned %p and bytesInBuffer %d. retSize=%d, limit=%ld\n",
 					sector, bufPointer, bytesInBuffer, retSize, limit);
-#else
-			pr_info("mgwfs_readfile(): mgwfs_getSector(,0x%llX,) returned %p. retSize=%d, limit=%ld\n",
-					sector, bufPointer, retSize, limit);
-#endif
 			pr_info("mgwfs_readfile(): buffer [0]=0x%08X [1]=0x%08X [2]=0x%08X\n", ip[0], ip[1], ip[2]);
 		}
 		dst += limit;
 		retSize += limit;
-#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 		sectorIdx += (limit+BYTES_PER_SECTOR-1)/BYTES_PER_SECTOR;
-#else
-		++sectorIdx;
-#endif
 		if ( sectorIdx >= retPtr->nblocks )
 		{
 			/* ran off the end of a retrieval pointer set so advance to next one */
@@ -486,11 +529,7 @@ static int getOurSuper(struct super_block *sb)
 	flags= ourSuper->flags;
 	memset(lclHomes, 0, sizeof(lclHomes));
 	maxHb = FSYS_HB_RANGE;
-#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 	bufPointer = mgwfs_getSector(sb,&ourSuper->buffer,0,NULL);
-#else
-	bufPointer = mgwfs_getSector(sb,&ourSuper->buffer,0);
-#endif
 	BUG_ON(!bufPointer);
 	if ( ourSuper->buffer.bh->b_size != sb->s_blocksize )
 	{
@@ -522,11 +561,7 @@ static int getOurSuper(struct super_block *sb)
 		sector = homeLbas[ii] + baseSector;
 		if ( (flags & MGWFS_MNT_OPT_VERBOSE_HOME) )
 			pr_info("mgwfs_getHomeBlock(): Attempting to read home block at sector 0x%llX\n", sector);
-#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 		bufPointer = mgwfs_getSector(sb,&ourSuper->buffer,sector,NULL);
-#else
-		bufPointer = mgwfs_getSector(sb,&ourSuper->buffer,sector);
-#endif
 		BUG_ON(!bufPointer);
 		memcpy(lclHome, bufPointer, sizeof(FsysHomeBlock));
 		cksum = 0;
@@ -598,20 +633,6 @@ static int getOurSuper(struct super_block *sb)
 	}
 	if ( (ourSuper->flags&MGWFS_MNT_OPT_VERBOSE_INDEX) )
 	{
-#if 0
-		char txt[256];
-		int len=0;
-		for (ii=0; ii < 15; ii += 3)
-		{
-			len += snprintf(txt+len,sizeof(txt)-len, "mgwfs: %d 0x%08X 0x%08X 0x%08X\n"
-							, ii/3
-							, ourSuper->indexSys[ii+0]
-							, ourSuper->indexSys[ii+1]
-							, ourSuper->indexSys[ii+2]
-							);
-		}
-		pr_info("mgwfs: Index.sys contents:\n%s",txt);
-#else
 		int ii=0;
 		char txt[256];
 		int len;
@@ -635,7 +656,6 @@ static int getOurSuper(struct super_block *sb)
 			++ii;
 			index += 3;
 		}
-#endif
 	}
 	if ( mgwfs_getFileHeader(sb, "freemap.sys", FSYS_ID_HEADER, FSYS_INDEX_FREE, ourSuper->indexSys + FSYS_INDEX_FREE*FSYS_MAX_ALTS, &ourSuper->freeMapHdr) )
 	{
@@ -671,13 +691,8 @@ static int fill_super(struct super_block *sb, void *data, int silent)
 	if ( !ourSuper )
 		return -ENOMEM;
 	sb->s_fs_info = ourSuper;
-#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 	sb->s_blocksize = PAGE_SIZE;			/* system normal */
 	sb->s_blocksize_bits = PAGE_SHIFT;		/* normal system shift */
-#else
-	sb->s_blocksize = BYTES_PER_SECTOR;		/* See if this breaks anything */
-	sb->s_blocksize_bits = 9;				/* 512 bits/sector */
-#endif
 	sb->s_maxbytes = 0x00FFFFFF/4;			/* Not really an upper limit, but set this just for grins and giggles */
 	sb->s_time_gran = 1;					/* mgwfs timestamps are in 1 second intervals, UTC */
 	ourSuper->defaultAllocation = 128;		/* Assume a default allocation */

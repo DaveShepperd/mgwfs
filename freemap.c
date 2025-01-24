@@ -46,44 +46,48 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 	if ( stuff )
 	{
 		int ii, leastDiff, leastDiffIdx;
-		FsysRetPtr *src;
+		FsysRetPtr *src, *hints;
 
 		/* assume nothing to report */
 		stuff->result.nblocks = 0;
 		stuff->result.start = 0;
-		if ( stuff->hint.start && stuff->hint.start )
+		if ( (hints=stuff->hints) )
 		{
-			uint32_t contigiousSector = stuff->hint.start + stuff->hint.nblocks;
-			/* A hint was provided. So see if there is a connecting section */
-			if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_FREE) )
+			int hintIdx;
+			for ( hintIdx=0; hintIdx < FSYS_MAX_FHPTRS && hints->start && hints->nblocks; ++hintIdx, ++hints )
 			{
-				pr_info("mgwfsFindFree(): Looking for 0x%X sector%s. Hint=0x%08X/0x%X. Contigious sector=0x%08X\n",
-						numSectors, numSectors == 1 ? "" : "s", stuff->hint.start, stuff->hint.nblocks, contigiousSector);
-			}
-			src = ourSuper->freeMap;
-			for ( ii = 0; ii < stuff->currListAlloc; ++ii, ++src )
-			{
-				if ( !src->start || !src->nblocks )
-					break;
-				if ( src->start == contigiousSector  )
+				uint32_t contigiousSector = hints->start + hints->nblocks;
+				/* A hint was provided. So see if there is a connecting section */
+				if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_FREE) )
 				{
-					int num = numSectors;
-					if ( num > src->nblocks )
-						num = src->nblocks;
-					/* we found a connecting section */
-					/* we can just clip off sectors from the current section */
-					stuff->result.start = src->start;
-					stuff->result.nblocks = num;
-					src->start += num;
-					if ( !(src->nblocks -= num) )
+					pr_info("mgwfsFindFree(): Looking for 0x%X sector%s. Hint=0x%08X/0x%X. Contigious sector=0x%08X\n",
+							numSectors, numSectors == 1 ? "" : "s", hints->start, hints->nblocks, contigiousSector);
+				}
+				src = ourSuper->freeMap;
+				for ( ii = 0; ii < stuff->currListAlloc; ++ii, ++src )
+				{
+					if ( !src->start || !src->nblocks )
+						break;
+					if ( src->start == contigiousSector  )
 					{
-						/* remove the existing section completely */
-						memmove(src, src + 1, (stuff->currListAlloc - ii) * sizeof(FsysRetPtr));
-						memset(ourSuper->freeMap + stuff->currListAlloc - 1, 0, sizeof(FsysRetPtr));
+						int num = numSectors;
+						if ( num > src->nblocks )
+							num = src->nblocks;
+						/* we found a connecting section */
+						/* we can just clip off sectors from the current section */
+						stuff->result.start = src->start;
+						stuff->result.nblocks = num;
+						src->start += num;
+						if ( !(src->nblocks -= num) )
+						{
+							/* remove the existing section completely */
+							memmove(src, src + 1, (stuff->currListAlloc - ii) * sizeof(FsysRetPtr));
+							memset(ourSuper->freeMap + stuff->currListAlloc - 1, 0, sizeof(FsysRetPtr));
+						}
+						stuff->updatedEntryIndex = ii;
+						ourSuper->freeListDirty = 1;
+						return 1;   /* something changed */
 					}
-					stuff->updatedEntryIndex = ii;
-					ourSuper->freeListDirty = 1;
-					return 1;   /* something changed */
 				}
 			}
 		}
@@ -295,12 +299,14 @@ int main(int argc, char **argv)
 	int opt;
 	int numSectors, allocated;
 	char *endp;
-	FsysRetPtr retSec;
+	FsysRetPtr retSec, hints[FSYS_MAX_FHPTRS];
 	MgwfsFoundFreeMap_t found;
 	MgwfsSuper_t super;
 
 	memset(&found, 0, sizeof(found));
 	memset(&super, 0, sizeof(super));
+	memset(&hints, 0, sizeof(hints));
+	found.hints = hints;
 	retSec.nblocks = 0;
 	retSec.start = 0;
 	while ( (opt = getopt(argc, argv, "r:s:v")) != -1 )
@@ -325,8 +331,8 @@ int main(int argc, char **argv)
 			break;
 		case 's':
 			endp = NULL;
-			found.hint.start = strtol(optarg, &endp, 0);
-			if ( !endp || *endp || found.hint.start < 4 || found.hint.start >= 0x00FFFFFF )
+			found.hints[0].start = strtol(optarg, &endp, 0);
+			if ( !endp || *endp || found.hints[0].start < 4 || found.hints[0].start >= 0x00FFFFFF )
 			{
 				fprintf(stderr, "Bad argument for -s: '%s'\n", optarg);
 				return 1;
@@ -371,14 +377,14 @@ int main(int argc, char **argv)
 				printf("Asked for %d sector%s. (hint=0x%08X) Found %d at 0x%08X (updIndex=%d, addedIdx=%d, allocated=%d)\n",
 					   numSectors,
 					   numSectors == 1 ? "" : "s",
-					   found.hint.start,
+					   found.hints[0].start,
 					   found.result.nblocks,
 					   found.result.start,
 					   found.updatedEntryIndex,
 					   found.addedEntryIndex,
 					   allocated);
 			}
-			found.hint.start = 0;
+			found.hints[0].start = 0;
 		}
 		else
 		{

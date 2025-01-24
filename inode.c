@@ -125,22 +125,30 @@ int mgwfs_alloc_mgwfs_inode(struct super_block *sb, uint64_t *out_inode_no)
 MgwfsInode_t* mgwfs_get_mgwfs_inode(struct super_block *sb, uint32_t inode_no, int generation, const char *fileName )
 {
 	MgwfsSuper_t *ourSuper = (MgwfsSuper_t *)sb->s_fs_info;
-	MgwfsInode_t *ourInode;
+	MgwfsInode_t *ourInode=NULL;
 	FsysHeader hdr;
 
-	if ( !mgwfs_getFileHeader(sb, fileName, FSYS_ID_HEADER, inode_no, ourSuper->indexSys + inode_no * FSYS_MAX_ALTS, &hdr) )
-		return NULL;
-	if ( generation && hdr.generation != generation )
-		return NULL;
-	ourInode = (MgwfsInode_t *)kmem_cache_alloc(mgwfs_inode_cache, GFP_KERNEL);
-	memset(ourInode,0,sizeof(MgwfsInode_t));
-	ourInode->clusters = hdr.clusters;
-	ourInode->ctime = hdr.ctime;
-	ourInode->inode_no = inode_no;
-	ourInode->mode = (hdr.type == FSYS_TYPE_DIR) ? S_IFDIR|0555:S_IFREG|0444;
-	ourInode->mtime = hdr.mtime;
-	memcpy(ourInode->pointers,hdr.pointers,sizeof(ourInode->pointers));
-	ourInode->size = hdr.size;
+	if ( mgwfs_getFileHeader(sb, fileName, FSYS_ID_HEADER, inode_no, ourSuper->indexSys + inode_no * FSYS_MAX_ALTS, &hdr) )
+	{
+		if ( !generation || hdr.generation == generation )
+		{
+			ourInode = (MgwfsInode_t *)kmem_cache_alloc(mgwfs_inode_cache, GFP_KERNEL);
+			memset(ourInode,0,sizeof(MgwfsInode_t));
+			ourInode->clusters = hdr.clusters;
+			ourInode->ctime = hdr.ctime;
+			ourInode->inode_no = inode_no;
+			ourInode->mode = (hdr.type == FSYS_TYPE_DIR) ? S_IFDIR|0555:S_IFREG|0444;
+			ourInode->mtime = hdr.mtime;
+			memcpy(ourInode->pointers,hdr.pointers,sizeof(ourInode->pointers));
+			ourInode->size = hdr.size;
+		}
+		else
+			pr_err("mgwfs_get_mgwfs_inode(): Failed generation match. Generation=%d, hdr.generation=%d\n",
+				   generation, hdr.generation);
+	}
+	else
+		pr_err("mgwfs_get_mgwfs_inode(): Failed mgwfs_getFileHeader(,'%s',,%d,...). Generation=%d\n",
+			   fileName, inode_no, generation );
 	return ourInode;
 }
 

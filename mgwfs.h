@@ -15,12 +15,11 @@
 
 extern struct mutex mgwfs_sb_lock;
 
-#define MGWFS_BLOCKSIZE PAGE_SIZE /* (BYTES_PER_SECTOR) */
-
 typedef struct
 {
 	struct buffer_head *bh;	/* read data buffer */
 	sector_t block;			/* block identifying the data in buffer */
+	int buffOffset;
 } MgwfsBlock_t;
 
 typedef struct
@@ -68,19 +67,17 @@ typedef struct MgwfsSuper_t
 	uint32_t flags;			/* for now, just verbose flags (see MGWFS_MNT_OPT_VERBOSE_xxx flags above) */
 } MgwfsSuper_t;
 
-#if MGWFS_BLOCKSIZE != BYTES_PER_SECTOR
 extern uint8_t* mgwfs_getSector(struct super_block *sb, MgwfsBlock_t *buffp, sector_t sector, int *numBytes);
-#else
-extern uint8_t* mgwfs_getSector(struct super_block *sb, MgwfsBlock_t *buffp, sector_t sector);
-#endif
-extern void mgwfs_writebackSector(MgwfsBlock_t *buffp);
+extern void mgwfs_putSector(struct super_block *sb, const uint8_t *ptr, sector_t sector);
+extern void mgwfs_putSectors(struct super_block *sb, const uint8_t *ptr, sector_t stSector, int numSectors);
 extern int mgwfs_getFileHeader(struct super_block *sb, const char *title, uint32_t fhID, uint32_t fileID, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp);
+extern int mgwfs_allocFileHeader(struct super_block *sb, uint32_t *fid, FsysHeader *fhp);
 extern int mgwfs_readFile(struct super_block *sb, const char *title, uint8_t *dst, int bytes, FsysRetPtr *retPtr, int squawk);
 
 typedef struct
 {
 	FsysRetPtr result;		/* newly formed selection */
-	FsysRetPtr hint;		/* hint of what to connect to if possible */
+	FsysRetPtr *hints;		/* hint of what to connect to if possible */
 	int currListAlloc;		/* maximum number of entries in list */
 	int updatedEntryIndex;	/* index of entry updated */
 	int addedEntryIndex;	/* index of entry added */

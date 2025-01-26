@@ -10,8 +10,13 @@
 #include <errno.h>
 #include <getopt.h>
 
+#if 0
 #define FSYS_FEATURES (FSYS_FEATURES_CMTIME|FSYS_FEATURES_JOURNAL)
 #include "agcfsys.h"
+#else
+typedef uint32_t sector_t;
+#include "mgwfs.h"
+#endif
 
 #ifndef S_IFREG
 #define S_IFREG 0100000
@@ -64,19 +69,20 @@ static BootSect bootSect;
 off64_t baseSector;
 #define VERBOSE_HOME	(1<<0)	/* display home block */
 #define VERBOSE_HEADERS	(1<<1)	/* display file headers */
-#define VERBOSE_READ	(1<<2)	/* display read requests */
-#define VERBOSE_INDEX	(1<<3)	/* display index.sys file and header */
-#define VERBOSE_FREEMAP	(1<<4)	/* display freemap file and header */
-#define VERBOSE_DMPROOT	(1<<5)	/* dump root directory contents and header */
-#define VERBOSE_ITERATE	(1<<6)	/* iterate directory tree */
+#define VERBOSE_RETPTRS	(1<<2)	/* display retrieval pointers in file headers */
+#define VERBOSE_READ	(1<<3)	/* display read requests */
+#define VERBOSE_INDEX	(1<<4)	/* display index.sys file and header */
+#define VERBOSE_FREEMAP	(1<<5)	/* display freemap file and header */
+#define VERBOSE_VERIFY_FREEMAP	(1<<6)	/* display freemap file and header */
+#define VERBOSE_DMPROOT	(1<<7)	/* dump root directory contents and header */
+#define VERBOSE_ITERATE	(1<<8)	/* iterate directory tree */
 static int verbose=VERBOSE_HOME;	/* Default to reading home block(s) */
 
 static void displayFileHeader(FILE *outp, FsysHeader *fhp, int retrievalsToo)
 {
 	FsysRetPtr *rp;
-	int ii;
+	int alt,ii;
 	
-	rp = fhp->pointers[0];
 	fprintf(outp,  "    id:        0x%X\n"
 			       "    size:      %d\n"
 				   "    clusters:  %d\n"
@@ -94,25 +100,32 @@ static void displayFileHeader(FILE *outp, FsysHeader *fhp, int retrievalsToo)
 			, fhp->ctime
 			, fhp->mtime
 			);
-	for (ii=0; ii < FSYS_MAX_FHPTRS; ++ii, ++rp )
+	
+	for (alt=0; alt < FSYS_MAX_ALTS; ++alt)
 	{
-		if ( !rp->start || !rp->nblocks )
-			break;
-	}
-	rp = fhp->pointers[0];
-	fprintf(outp, "    pointers (%d of %ld):", ii, FSYS_MAX_FHPTRS);
-	if ( retrievalsToo )
-	{
+		rp = fhp->pointers[alt];
 		for (ii=0; ii < FSYS_MAX_FHPTRS; ++ii, ++rp )
 		{
 			if ( !rp->start || !rp->nblocks )
 				break;
-			fprintf(outp, " 0x%X/%d", rp->start, rp->nblocks);
 		}
+		rp = fhp->pointers[alt];
+		fprintf(outp, "    pointers[%d] (%d of %ld):", alt, ii, FSYS_MAX_FHPTRS);
+		if ( retrievalsToo )
+		{
+			for (ii=0; ii < FSYS_MAX_FHPTRS; ++ii, ++rp )
+			{
+				if ( !rp->start || !rp->nblocks )
+					break;
+				fprintf(outp, " 0x%X/%d", rp->start, rp->nblocks);
+			}
+		}
+		else
+			fprintf(outp, " 0x%X/%d%s", rp->start, rp->nblocks, (rp[1].start && rp[1].nblocks) ? " ...":"");
+		fprintf(outp, "\n");
+		if ( !(retrievalsToo&VERBOSE_RETPTRS) )
+			break;
 	}
-	else
-		fprintf(outp, " 0x%X/%d%s", rp->start, rp->nblocks, (fhp->pointers[1]->start && fhp->pointers[1]->nblocks) ? " ...":"");
-	fprintf(outp, "\n");
 	fflush(outp);
 }
 
@@ -398,18 +411,24 @@ static void dumpIndex(uint32_t *indexBase, int bytes)
 	}
 }
 
-static void dumpFreemap(FsysRetPtr *rpBase, int bytes )
+static void dumpFreemap(const char *title, FsysRetPtr *rpBase, int entries )
 {
 	FsysRetPtr *rp = rpBase;
 	int ii=0;
+	int32_t freeSize=0;
 	
-	printf("Contents of freemap.sys:\n");
-	while ( rp < rpBase+(bytes+sizeof(FsysRetPtr)-1)/sizeof(FsysRetPtr) )
+	if ( title )
+		printf("%s\n", title);
+	while ( rp < rpBase+entries )
 	{
-		printf("    %5d: 0x%08X/%d\n", ii, rp->start, rp->nblocks);
+		freeSize += rp->nblocks;
+		printf("    %5d: 0x%08X-0x%08X (%d)\n", ii, rp->start, rp->nblocks ? rp->start+rp->nblocks-1:rp->start, rp->nblocks);
+		if ( !rp->start || !rp->nblocks )
+			break;
 		++ii;
 		++rp;
 	}
+	printf("    Total size: %d sectors\n", freeSize);
 }
 
 void dumpDir(uint8_t *dirBase, int bytes, int fd, uint32_t *indexSys )
@@ -437,7 +456,7 @@ void dumpDir(uint8_t *dirBase, int bytes, int fd, uint32_t *indexSys )
 		if ( fd > 0 && indexSys )
 		{
 			if ( getFileHeader((char *)dir, fd, FSYS_ID_HEADER, indexSys + fid * FSYS_MAX_ALTS, &hdr) )
-				displayFileHeader(stdout,&hdr,1);
+				displayFileHeader(stdout,&hdr,1|(verbose&VERBOSE_RETPTRS));
 		}
 		++ii;
 		dir += txtLen;
@@ -479,7 +498,7 @@ int iterateDir(int nest, uint8_t *dirBase, int bytes, int fd, uint32_t *indexSys
 					uint8_t *fileBuff;
 					printf("%*s%5d: 0x%08X DIR 0x%08X/0x%08X 0x%02X %s\n", nest*4," ",ii, fid, hdr.size, hdr.clusters, txtLen, dir );
 					if ( (verbose&VERBOSE_HEADERS) )
-						displayFileHeader(stdout, &hdr, 1);
+						displayFileHeader(stdout, &hdr, 1|(verbose&VERBOSE_RETPTRS));
 					fileBuff = (uint8_t*)malloc(hdr.clusters*512);
 					if ( fileBuff )
 					{
@@ -502,19 +521,108 @@ int iterateDir(int nest, uint8_t *dirBase, int bytes, int fd, uint32_t *indexSys
 	return ret;
 }
 
+static void verifyFreemap(int fd, uint32_t *fileContents, int idxEntries, FsysRetPtr *freemapFileContents, FsysHeader *freeMapHdr)
+{
+	FsysHeader hdr;
+	int idx, rpIdx;
+	int verbSave = verbose;
+	MgwfsFoundFreeMap_t found;
+	MgwfsSuper_t super;
+	FsysRetPtr *ourFreeMap, *rp, *rpMax;
+	uint32_t *indexFileContents = fileContents;
+	
+	/* Actually a cheat. We're using the freemap routines to
+	   build a 'used' list instead of a freelist
+	*/
+	memset(&super,0,sizeof(super));
+	memset(&found,0,sizeof(found));
+	super.freeMapHdr.size = 0;
+	super.freeMapHdr.clusters = 512;
+	found.currListAlloc = (super.freeMapHdr.clusters*512)/sizeof(FsysRetPtr);
+	ourFreeMap = (FsysRetPtr *)calloc(found.currListAlloc,sizeof(FsysRetPtr));
+	super.freeMap = ourFreeMap;
+	/* Prepopulate the "used" list with the home block usage */
+	for (idx=0; idx < FSYS_MAX_ALTS; ++idx)
+	{
+		super.freeMap[idx].nblocks = 1;
+		super.freeMap[idx].start = FSYS_HB_ALG(idx,FSYS_HB_RANGE);
+	}
+	verbose = 0;
+	for (idx=0; idx < idxEntries; ++idx, indexFileContents += FSYS_MAX_ALTS )
+	{
+		if ( *indexFileContents && !(*indexFileContents & FSYS_EMPTYLBA_BIT) )
+		{
+			if ( getFileHeader("?", fd, idx ? FSYS_ID_HEADER:FSYS_ID_INDEX, indexFileContents, &hdr) )
+			{
+				for (rpIdx=0; rpIdx < FSYS_MAX_ALTS; ++rpIdx)
+				{
+					rp = hdr.pointers[rpIdx];
+					rpMax = rp+FSYS_MAX_FHPTRS;
+					while ( rp < rpMax && rp->nblocks && rp->start )
+					{
+						if ( !mgwfsFreeSectors(&super,&found,rp) )
+							break;
+						++rp;
+					}
+				}
+			}
+		}
+	}
+	verbose = verbSave;
+	dumpFreemap("Contents of \"used\" blocks before merge:", super.freeMap, found.currListAlloc);
+	rp = ourFreeMap;
+	rpMax = ourFreeMap+found.currListAlloc;
+	/* Swap freemap pointer */
+	super.freeMap = freemapFileContents;
+	super.freeMapHdr = *freeMapHdr;
+	found.currListAlloc = (freeMapHdr->clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
+	while ( rp < rpMax && rp->start && rp->nblocks )
+	{
+		mgwfsFreeSectors(&super,&found,rp);
+		++rp;
+	}
+	/* Now "free" the file headers too */
+	indexFileContents = fileContents;
+	for (idx=0; idx < idxEntries; ++idx, indexFileContents += FSYS_MAX_ALTS )
+	{
+		if ( *indexFileContents && !(*indexFileContents & FSYS_EMPTYLBA_BIT) )
+		{
+			for (rpIdx=0; rpIdx < FSYS_MAX_ALTS; ++rpIdx)
+			{
+				FsysRetPtr tmpPtr;
+				tmpPtr.nblocks = 1;
+				tmpPtr.start = indexFileContents[rpIdx];
+				mgwfsFreeSectors(&super,&found,&tmpPtr);
+			}
+		}
+		else if ( (*indexFileContents & FSYS_EMPTYLBA_BIT) )
+		{
+			printf("FYI: Index entry has EMPTY bit set: %d:", idx);
+			for (rpIdx=0; rpIdx < FSYS_MAX_ALTS; ++rpIdx)
+				printf("  0x%08X", indexFileContents[rpIdx]);
+			printf("\n");
+		}
+	}
+	dumpFreemap("Contents of freemap.sys after merge:", freemapFileContents, found.currListAlloc);
+	free(ourFreeMap);
+}
+
 static int helpEm(void)
 {
 	printf("Usage: dmpfs-mgwfs [-v n] image\n"
 		   "Where:\n"
-		   "-v  = bit mask of verbose modes:\n"
-		   "      1 = display home block\n"
-		   "      2 = display file headers\n"
-		   "      4 = display attempts at file reads\n"
-		   "      8 = display contents of index.sys file\n"
-		   "     16 = display contents of freemap.sys file\n"
-		   "     32 = display contents of rootdir.sys file\n"
-		   "     64 = display directory tree\n"
-		   "image - path to filesystem\n"
+		   "-v n      = n is bit mask of verbose modes:\n"
+		   "            May be expressed with normal C syntax [i.e. prefix 0x or 0b for hex or binary]:\n"
+		   "    0x001 = display home block\n"
+		   "    0x002 = display file headers\n"
+		   "    0x004 = display all retrieval pointers in file headers\n"
+		   "    0x008 = display attempts at file reads\n"
+		   "    0x010 = display contents of index.sys file\n"
+		   "    0x020 = display contents of freemap.sys file\n"
+		   "    0x040 = display and verify contents of freemap.sys file\n"
+		   "    0x080 = display contents of rootdir.sys file\n"
+		   "    0x100 = display directory tree\n"
+		   "image     = path to filesystem file\n"
 		   );
 	return 1;
 }
@@ -631,11 +739,11 @@ int main(int argc, char *argv[])
 			displayHomeBlock(stdout,&homeBlk,ckSum);
 		}
 		if ( getFileHeader("index.sys", fd, FSYS_ID_INDEX, homeBlk.index, &indexFileHeader) && (verbose&VERBOSE_HEADERS) )
-			displayFileHeader(stdout,&indexFileHeader,1);
+			displayFileHeader(stdout,&indexFileHeader,1|(verbose&VERBOSE_RETPTRS));
 		else
 			ret = -1;
 		if ( getFileHeader("boot0", fd, FSYS_ID_HEADER, homeBlk.boot, &bootFileHeader) && (verbose & VERBOSE_HEADERS) )
-			displayFileHeader(stdout,&bootFileHeader,1);
+			displayFileHeader(stdout,&bootFileHeader,1|(verbose&VERBOSE_RETPTRS));
 		else
 			ret = -1;
 		indexFileContents = (uint32_t *)calloc(indexFileHeader.clusters*512,1);
@@ -648,18 +756,18 @@ int main(int argc, char *argv[])
 		if ( (verbose & VERBOSE_INDEX) )
 		{
 			if ( !(verbose&VERBOSE_HEADERS) )
-				displayFileHeader(stdout,&indexFileHeader,1);
+				displayFileHeader(stdout,&indexFileHeader,1|(verbose&VERBOSE_RETPTRS));
 			dumpIndex(indexFileContents, indexFileHeader.size);
 		}
 		if ( getFileHeader("freemap.sys", fd, FSYS_ID_HEADER, indexFileContents+FSYS_INDEX_FREE*FSYS_MAX_ALTS,&freemapFileHeader ) )
 		{
 			if ( (verbose & VERBOSE_HEADERS) )
-				displayFileHeader(stdout, &freemapFileHeader, 1);
+				displayFileHeader(stdout, &freemapFileHeader, 1|(verbose&VERBOSE_RETPTRS));
 		}
 		if ( indexFileContents[FSYS_FEATURES_JOURNAL*FSYS_MAX_ALTS] )
 		{
 			if ( getFileHeader("journal.sys", fd, FSYS_ID_HEADER, indexFileContents+FSYS_INDEX_JOURNAL*FSYS_MAX_ALTS, &journalFileHeader) && (verbose&VERBOSE_HEADERS) )
-				displayFileHeader(stdout,&journalFileHeader,1);
+				displayFileHeader(stdout,&journalFileHeader,1|(verbose&VERBOSE_RETPTRS));
 		}
 		freemapFileContents = (FsysRetPtr *)calloc(freemapFileHeader.clusters*512,1);
 		if ( readFile("freemap.sys", fd, (uint8_t*)freemapFileContents, freemapFileHeader.size, freemapFileHeader.pointers[0]) < 0 ) 
@@ -668,10 +776,21 @@ int main(int argc, char *argv[])
 			ret = -1;
 			break;
 		}
-		if ( (verbose&VERBOSE_FREEMAP) )
-			dumpFreemap(freemapFileContents, freemapFileHeader.size);
+		if ( (verbose & (VERBOSE_FREEMAP | VERBOSE_VERIFY_FREEMAP)) )
+		{
+			dumpFreemap("Contents of freemap.sys before merge:", freemapFileContents, (freemapFileHeader.size+sizeof(FsysRetPtr)-1)/sizeof(FsysRetPtr));
+			if ( (verbose & VERBOSE_VERIFY_FREEMAP) )
+			{
+				verifyFreemap(fd,
+							  indexFileContents,
+							  (indexFileHeader.clusters*512)/(sizeof(uint32_t *)*FSYS_MAX_ALTS),
+							  freemapFileContents,
+							  &freemapFileHeader
+							  );
+			}
+		}
 		if ( getFileHeader("rootdir.sys", fd, FSYS_ID_HEADER, indexFileContents + FSYS_INDEX_ROOT * FSYS_MAX_ALTS, &dirFileHeader) && (verbose&VERBOSE_HEADERS))
-			displayFileHeader(stdout,&dirFileHeader,1);
+			displayFileHeader(stdout,&dirFileHeader,1|(verbose&VERBOSE_RETPTRS));
 		dirFileContents = (uint8_t *)calloc(dirFileHeader.clusters*512,1);
 		if ( readFile("rootdir.sys", fd, dirFileContents, dirFileHeader.size, dirFileHeader.pointers[0]) < 0 )
 		{

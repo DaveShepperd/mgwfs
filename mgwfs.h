@@ -78,6 +78,7 @@ typedef struct
 {
 	FsysRetPtr result;		/* newly formed selection */
 	FsysRetPtr *hints;		/* hint of what to connect to if possible */
+	uint32_t minSector;		/* minimum sector to look for */
 	int currListAlloc;		/* maximum number of entries in list */
 	int updatedEntryIndex;	/* index of entry updated */
 	int addedEntryIndex;	/* index of entry added */

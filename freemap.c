@@ -1,8 +1,11 @@
 #ifndef STANDALONE_FREEMAP
 	#define STANDALONE_FREEMAP (0)
 #endif
+#ifndef STANDALONE_FREEMAP_LIB
+	#define STANDALONE_FREEMAP_LIB (0)
+#endif
 
-#if !STANDALONE_FREEMAP
+#if !STANDALONE_FREEMAP && !STANDALONE_FREEMAP_LIB
 
 	#include "kmgwfs.h"
 
@@ -165,7 +168,7 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 	return 0;
 }
 
-#define HANDLE_FREE_OVERLAPS (0)	/* Write this code someday */
+#define HANDLE_FREE_OVERLAPS (0)
 
 int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRetPtr *retp)
 {
@@ -190,7 +193,6 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 			srcEnd = src->start + src->nblocks;
 			/* Point to next one on the list */
 			src1 = src + 1;
-#if !HANDLE_FREE_OVERLAPS
 			if ( endRetSector == src->start )
 			{
 				/* We are to free ahead of current */
@@ -240,10 +242,11 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 			}
 			if ( retp->start > srcEnd )
 				continue;               /* this should be the normal condition */
-			/* Overlap conditions should be recorded as a bug instead of handled */
+			/* Overlap conditions should be recorded as a bug instead of being handled */
 			pr_err("mgwsFreeSectors(): BUG: Tried to free 0x%08X-0x%08X (0x%X) which overlaps entry %d: 0x%08X-0x%08X (0x%X)\n",
 				   retp->start, retp->start + retp->nblocks - 1, retp->nblocks,
 				   ii, src->start, src->start + src->nblocks - 1, src->nblocks);
+#if !HANDLE_FREE_OVERLAPS
 			return 0;
 #else
 			/* Write this code someday */
@@ -279,14 +282,17 @@ static FsysRetPtr sampleFreeMap[] =
 	{ 0x1300, 1000 },
 	{ 0x2400, 1 },
 	{ 0x2500, 5 },
+	{ 0x3000, 10000 },
 	{ 0, 0 },
 	{ 0, 0 }
 };
 
 static int help_em(const char *title)
 {
-	printf("%s [-v][-s sector][-r sector[,num]] numSectors\n"
+	printf("%s [-v][-c count][-m min][-s sector][-r sector[,num]] numSectors\n"
 		   "Where:\n"
+		   "-c count        = specify the count of sections to get\n"
+		   "-m min          = specify the minimum sector to look for\n"
 		   "-r sector[,num] = specify sector and optional number of sectors to return to freelist\n"
 		   "-s sector       = specify a sector hint\n"
 		   "-v              = set verbose mode\n"
@@ -296,7 +302,7 @@ static int help_em(const char *title)
 
 int main(int argc, char **argv)
 {
-	int opt;
+	int opt, alts=1;
 	int numSectors, allocated;
 	char *endp;
 	FsysRetPtr retSec, hints[FSYS_MAX_FHPTRS];
@@ -309,10 +315,30 @@ int main(int argc, char **argv)
 	found.hints = hints;
 	retSec.nblocks = 0;
 	retSec.start = 0;
-	while ( (opt = getopt(argc, argv, "r:s:v")) != -1 )
+	while ( (opt = getopt(argc, argv, "c:m:r:s:v")) != -1 )
 	{
 		switch (opt)
 		{
+		case 'c':
+			endp = NULL;
+			alts = strtol(optarg, &endp, 0);
+			if ( !endp || *endp || alts < 1 || alts > FSYS_MAX_ALTS )
+			{
+				fprintf(stderr, "Bad argument for -c: '%s'\n", optarg);
+				return 1;
+			}
+			break;
+			
+		case 'm':
+			endp = NULL;
+			found.minSector = strtol(optarg, &endp, 0);
+			if ( !endp || *endp || found.minSector < 0 || found.minSector >= 0x00FFFFFF )
+			{
+				fprintf(stderr, "Bad argument for -m: '%s'\n", optarg);
+				return 1;
+			}
+			break;
+
 		case 'r':
 			endp = NULL;
 			retSec.start = strtol(optarg, &endp, 0);
@@ -349,11 +375,16 @@ int main(int argc, char **argv)
 /*	printf("argc=%d, optind=%d\n", argc, optind); */
 	if ( argc - optind < 1 )
 		return help_em(argv[0]);
+	if ( alts > 1 && found.minSector )
+	{
+		fprintf(stderr,"Cannot provide both -c and -m\n");
+		return help_em(argv[0]);
+	}
 	endp = NULL;
 	numSectors = strtol(argv[optind], &endp, 0);
 	if ( !endp || *endp || numSectors < 1 || numSectors >= 0x00FFFFFF )
 	{
-		fprintf(stderr, "Bad argument for -n: '%s'\n", argv[optind]);
+		fprintf(stderr, "Bad argument for number of sectors: '%s'\n", argv[optind]);
 		return 1;
 	}
 	found.currListAlloc = sizeof(sampleFreeMap) / sizeof(FsysRetPtr);

@@ -14,17 +14,20 @@ all: ko dmpfs-mgwfs freemap #mkfs-mgwfs
 ko:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
 
-mkfs-mgwfs.o: mkfs-mgwfs.c mgwfs.h Makefile
-	gcc $(SA_CFLAGS) $<
+#mkfs-mgwfs.o: mkfs-mgwfs.c mgwfs.h Makefile
+#	gcc $(SA_CFLAGS) $<
 
-mkfs-mgwfs: mkfs-mgwfs.o Makefile
-	gcc $(SA_LFLAGS) -o $@ $<
+#mkfs-mgwfs: mkfs-mgwfs.o Makefile
+#	gcc $(SA_LFLAGS) -o $@ $<
 
 dmpfs-mgwfs.o: dmpfs-mgwfs.c mgwfs.h Makefile
 	gcc $(SA_CFLAGS) $<
 
-dmpfs-mgwfs: dmpfs-mgwfs.o Makefile
-	gcc $(SA_LFLAGS) -o $@ $<
+freemap_lib.o: freemap.c Makefile
+	gcc $(SA_CFLAGS) -o $@ -DSTANDALONE_FREEMAP_LIB $<
+
+dmpfs-mgwfs: dmpfs-mgwfs.o freemap_lib.o Makefile
+	gcc $(SA_LFLAGS) -o $@ dmpfs-mgwfs.o freemap_lib.o
 
 freemap_sa.o: freemap.c Makefile
 	gcc $(SA_CFLAGS) -o $@ -DSTANDALONE_FREEMAP $<

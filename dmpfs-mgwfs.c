@@ -521,7 +521,7 @@ int iterateDir(int nest, uint8_t *dirBase, int bytes, int fd, uint32_t *indexSys
 	return ret;
 }
 
-static void verifyFreemap(int fd, uint32_t *fileContents, int idxEntries, FsysRetPtr *freemapFileContents, FsysHeader *freeMapHdr)
+static void verifyFreemap(int fd, uint32_t *fileContents, int idxEntries, FsysRetPtr *freemapFileContents, FsysHeader *freeMapHdr, uint32_t maxLBA)
 {
 	FsysHeader hdr;
 	int idx, rpIdx;
@@ -530,6 +530,7 @@ static void verifyFreemap(int fd, uint32_t *fileContents, int idxEntries, FsysRe
 	MgwfsSuper_t super;
 	FsysRetPtr *ourFreeMap, *rp, *rpMax;
 	uint32_t *indexFileContents = fileContents;
+	uint32_t hdrType;
 	
 	/* Actually a cheat. We're using the freemap routines to
 	   build a 'used' list instead of a freelist
@@ -538,7 +539,7 @@ static void verifyFreemap(int fd, uint32_t *fileContents, int idxEntries, FsysRe
 	memset(&found,0,sizeof(found));
 	super.freeMapHdr.size = 0;
 	super.freeMapHdr.clusters = 512;
-	found.currListAlloc = (super.freeMapHdr.clusters*512)/sizeof(FsysRetPtr);
+	found.currListAlloc = (super.freeMapHdr.clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
 	ourFreeMap = (FsysRetPtr *)calloc(found.currListAlloc,sizeof(FsysRetPtr));
 	super.freeMap = ourFreeMap;
 	/* Prepopulate the "used" list with the home block usage */
@@ -548,14 +549,22 @@ static void verifyFreemap(int fd, uint32_t *fileContents, int idxEntries, FsysRe
 		super.freeMap[idx].start = FSYS_HB_ALG(idx,FSYS_HB_RANGE);
 	}
 	verbose = 0;
+	/* Populate the rest of the used list by reading all the file headers */
+	hdrType = FSYS_ID_INDEX;
 	for (idx=0; idx < idxEntries; ++idx, indexFileContents += FSYS_MAX_ALTS )
 	{
 		if ( *indexFileContents && !(*indexFileContents & FSYS_EMPTYLBA_BIT) )
 		{
-			if ( getFileHeader("?", fd, idx ? FSYS_ID_HEADER:FSYS_ID_INDEX, indexFileContents, &hdr) )
+			if ( getFileHeader("?", fd, hdrType, indexFileContents, &hdr) )
 			{
+				FsysRetPtr tmp;
+				tmp.nblocks = 1;
 				for (rpIdx=0; rpIdx < FSYS_MAX_ALTS; ++rpIdx)
 				{
+					/* Add the copy of the file header sector to the list */
+					tmp.start = indexFileContents[rpIdx];
+					mgwfsFreeSectors(&super,&found,&tmp);
+					/* Add all the sectors of the file copy */
 					rp = hdr.pointers[rpIdx];
 					rpMax = rp+FSYS_MAX_FHPTRS;
 					while ( rp < rpMax && rp->nblocks && rp->start )
@@ -566,43 +575,28 @@ static void verifyFreemap(int fd, uint32_t *fileContents, int idxEntries, FsysRe
 					}
 				}
 			}
+			else
+			{
+				printf("Failed to read FH at 0x%08X\n", indexFileContents[0]);
+			}
 		}
+		hdrType = FSYS_ID_HEADER;
 	}
 	verbose = verbSave;
-	dumpFreemap("Contents of \"used\" blocks before merge:", super.freeMap, found.currListAlloc);
+	dumpFreemap("Contents of \"used\" blocks before merge:", ourFreeMap, found.currListAlloc);
 	rp = ourFreeMap;
 	rpMax = ourFreeMap+found.currListAlloc;
 	/* Swap freemap pointer */
 	super.freeMap = freemapFileContents;
 	super.freeMapHdr = *freeMapHdr;
 	found.currListAlloc = (freeMapHdr->clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
+	printf("Total entries available for used list: %ld, for free list: %d\n", rpMax-rp, found.currListAlloc);
 	while ( rp < rpMax && rp->start && rp->nblocks )
 	{
 		mgwfsFreeSectors(&super,&found,rp);
 		++rp;
 	}
-	/* Now "free" the file headers too */
-	indexFileContents = fileContents;
-	for (idx=0; idx < idxEntries; ++idx, indexFileContents += FSYS_MAX_ALTS )
-	{
-		if ( *indexFileContents && !(*indexFileContents & FSYS_EMPTYLBA_BIT) )
-		{
-			for (rpIdx=0; rpIdx < FSYS_MAX_ALTS; ++rpIdx)
-			{
-				FsysRetPtr tmpPtr;
-				tmpPtr.nblocks = 1;
-				tmpPtr.start = indexFileContents[rpIdx];
-				mgwfsFreeSectors(&super,&found,&tmpPtr);
-			}
-		}
-		else if ( (*indexFileContents & FSYS_EMPTYLBA_BIT) )
-		{
-			printf("FYI: Index entry has EMPTY bit set: %d:", idx);
-			for (rpIdx=0; rpIdx < FSYS_MAX_ALTS; ++rpIdx)
-				printf("  0x%08X", indexFileContents[rpIdx]);
-			printf("\n");
-		}
-	}
+	printf("Free'd a total of %ld used entries\nThe following should have just one entry from 0x01 to 0x%08X\n", rp-ourFreeMap, maxLBA-1);
 	dumpFreemap("Contents of freemap.sys after merge:", freemapFileContents, found.currListAlloc);
 	free(ourFreeMap);
 }
@@ -783,9 +777,10 @@ int main(int argc, char *argv[])
 			{
 				verifyFreemap(fd,
 							  indexFileContents,
-							  (indexFileHeader.clusters*512)/(sizeof(uint32_t *)*FSYS_MAX_ALTS),
+							  (indexFileHeader.clusters*BYTES_PER_SECTOR)/(sizeof(uint32_t)*FSYS_MAX_ALTS),
 							  freemapFileContents,
-							  &freemapFileHeader
+							  &freemapFileHeader,
+							  homeBlk.max_lba
 							  );
 			}
 		}

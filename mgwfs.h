@@ -58,6 +58,7 @@ typedef struct MgwfsSuper_t
 	int indexFHDirty;		/* flag indicating index file header is dirty */
 	int indexSysDirty;		/* flag indicating index.sys contents is dirty */
 	FsysHeader freeMapHdr;	/* copy of file header of freemap.sys */
+	int freeMapEntries;		/* Number of entries in freemap */
 	FsysRetPtr *freeMap;	/* contents of freemap.sys */
 	int freeListFHDirty;	/* flag indicating freeMapHdr is dirty */
 	int freeListDirty;		/* flag indicating freelist contents is dirty */
@@ -80,8 +81,9 @@ typedef struct
 	FsysRetPtr *hints;		/* hint of what to connect to if possible */
 	uint32_t minSector;		/* minimum sector to look for */
 	int currListAlloc;		/* maximum number of entries in list */
-	int updatedEntryIndex;	/* index of entry updated */
-	int addedEntryIndex;	/* index of entry added */
+//	int updatedEntryIndex;	/* index of entry updated */
+//	int addedEntryIndex;	/* index of entry added */
+	int allocChange;		/* number of entries added or deleted */
 } MgwfsFoundFreeMap_t;
 
 extern void mgwfsDumpFreeMap( const char *title, const FsysRetPtr *list );

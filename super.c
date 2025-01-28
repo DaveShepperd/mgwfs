@@ -673,6 +673,13 @@ static int getOurSuper(struct super_block *sb)
 				kfree(ourSuper->freeMap);
 				ourSuper->freeMap = NULL;
 			}
+			else
+			{
+				FsysRetPtr *rp = ourSuper->freeMap, *rpMax = ourSuper->freeMap + (ourSuper->freeMapHdr.clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr)-1;
+				while ( rp < rpMax && rp->nblocks && rp->start )
+					++rp;
+				ourSuper->freeMapEntries = rp-ourSuper->freeMap;
+			}
 		}
 		else
 			pr_err("mgwfs(): Failed to kzalloc(%d) bytes for freemap.sys. Ignored.\n", ourSuper->freeMapHdr.clusters * BYTES_PER_SECTOR);

@@ -70,7 +70,7 @@ void mgwfs_save_sb(struct super_block *sb);
 
 // functions to operate inode
 void mgwfs_fill_inode(struct super_block *sb, struct inode *inode, MgwfsInode_t *mgwfs_inode, const char *fName);
-int mgwfs_alloc_mgwfs_inode(struct super_block *sb, uint64_t *out_inode_no);
+int mgwfs_alloc_mgwfs_inode(struct super_block *sb, uint64_t *out_inode_no, umode_t mode);
 MgwfsInode_t *mgwfs_get_mgwfs_inode(struct super_block *sb, uint32_t inode_no, int generation, const char *fileName );
 
 int mgwfs_statfs(struct dentry *dirp, struct kstatfs *statp);

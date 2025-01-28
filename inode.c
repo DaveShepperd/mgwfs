@@ -78,49 +78,72 @@ void mgwfs_fill_inode(struct super_block *sb, struct inode *inode,
 	}
 }
 
-#if 0
-int mgwfs_alloc_mgwfs_inode(struct super_block *sb, uint64_t *out_inode_no)
+int mgwfs_alloc_mgwfs_inode(struct super_block *sb, uint64_t *out_inode_no, umode_t mode)
 {
 	MgwfsSuper_t *ourSuper;
-	struct buffer_head *bh;
-	uint64_t i;
-	int ret;
-	char *bitmap;
-	char *slot;
-	char needle;
-
+	MgwfsFoundFreeMap_t freeStuff;
+	FsysHeader tmpHdr;
+	int idx;
+	uint32_t fid, *indexSys, *indexSysMax;
+	struct timespec64 ts;
+	
+	memset(&freeStuff,0,sizeof(freeStuff));
 	ourSuper = MGWFS_SB(sb);
 
 	mutex_lock(&mgwfs_sb_lock);
 
-	bh = sb_bread(sb, MGWFS_INODE_BITMAP_BLOCK_NO);
-	BUG_ON(!bh);
-
-	bitmap = bh->b_data;
-	ret = -ENOSPC;
-	for ( i = 0; i < mgwfs_sb->inode_table_size; i++ )
+	indexSys = ourSuper->indexSys;
+	indexSysMax = indexSys + (ourSuper->indexSysHdr.clusters*BYTES_PER_SECTOR)/sizeof(uint32_t);
+	while ( indexSys < indexSysMax && *indexSys && !(*indexSys&FSYS_EMPTYLBA_BIT) )
+		indexSys += FSYS_MAX_ALTS;
+	if ( indexSys >= indexSysMax )
 	{
-		slot = bitmap + i / BITS_IN_BYTE;
-		needle = 1 << (i % BITS_IN_BYTE);
-		if ( 0 == (*slot & needle) )
+		mutex_unlock(&mgwfs_sb_lock);
+		return -ENOSPC;
+	}
+	fid = indexSys-ourSuper->indexSys;
+	freeStuff.currListAlloc = (ourSuper->freeMapHdr.clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
+	for (idx=0; idx < FSYS_MAX_ALTS; ++idx)
+	{
+		freeStuff.minSector = FSYS_HB_ALG(idx, FSYS_HB_RANGE);
+		if ( mgwfsFindFree(ourSuper, &freeStuff, 1) )
 		{
-			*out_inode_no = i;
-			*slot |= needle;
-			mgwfs_sb->inode_count += 1;
-			ret = 0;
-			break;
+			/* We've allocated a sector for the file header */
+			indexSys[idx] = freeStuff.result.start;
+			ourSuper->freeMapEntries += freeStuff.allocChange;
+		}
+		else
+		{
+			int nope;
+			/* Ran out of room for file headers */
+			/* Just for grins and chuckles, free any we previously allocated */
+			for (nope=0; nope < idx; ++nope)
+			{
+				freeStuff.result.nblocks = 1;
+				freeStuff.result.start = indexSys[nope];
+				mgwfsFreeSectors(ourSuper,&freeStuff,&freeStuff.result);
+				ourSuper->freeMapEntries += freeStuff.allocChange;
+				indexSys[nope] = FSYS_EMPTYLBA_BIT|1;
+			}
+			mutex_unlock(&mgwfs_sb_lock);
+			return -ENOSPC;		/* No room at the inn */
 		}
 	}
-
-	mark_buffer_dirty(bh);
-	sync_dirty_buffer(bh);
-	brelse(bh);
-	mgwfs_save_sb(sb);
-
+	memset(&tmpHdr,0,sizeof(tmpHdr));
+	tmpHdr.generation = 1;
+	ktime_get_ts64(&ts);
+	tmpHdr.ctime = ts.tv_sec&0xFFFFFFFF;
+	tmpHdr.mtime = ts.tv_sec&0xFFFFFFFF;
+	tmpHdr.id = FSYS_ID_HEADER;
+	tmpHdr.size = 0;
+	tmpHdr.type = (mode&S_IFDIR) ? FSYS_TYPE_DIR : FSYS_TYPE_FILE;
+	for (idx=0; idx < FSYS_MAX_ALTS; ++idx)
+	{
+		mgwfs_putSector(sb,(uint8_t*)&tmpHdr,indexSys[idx]);
+	}
 	mutex_unlock(&mgwfs_sb_lock);
-	return ret;
+	return 0;
 }
-#endif
 
 MgwfsInode_t* mgwfs_get_mgwfs_inode(struct super_block *sb, uint32_t inode_no, int generation, const char *fileName )
 {
@@ -262,7 +285,7 @@ int mgwfs_create_inode(struct inode *dir, struct dentry *dentry,
 	mgwfs_sb = MGWFS_SB(sb);
 
 	/* Create mgwfs_inode */
-	ret = mgwfs_alloc_mgwfs_inode(sb, &inode_no);
+	ret = mgwfs_alloc_mgwfs_inode(sb, &inode_no, mode);
 	if ( 0 != ret )
 	{
 		printk(KERN_ERR "Unable to allocate on-disk inode. "

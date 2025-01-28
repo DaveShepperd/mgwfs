@@ -42,6 +42,8 @@ void mgwfsDumpFreeMap(const char *title, const FsysRetPtr *list)
 		++ii;
 		++list;
 	}
+	if ( !ii )
+		pr_info("mgwfs_dumpfree(): %3d: <empty>\n", ii);
 }
 
 int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSectors)
@@ -49,11 +51,14 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 	if ( stuff )
 	{
 		int ii, leastDiff, leastDiffIdx;
-		FsysRetPtr *src, *hints;
-
+		FsysRetPtr *src, *src1, *hints;
+		uint32_t minSector;
+		
 		/* assume nothing to report */
 		stuff->result.nblocks = 0;
 		stuff->result.start = 0;
+		stuff->allocChange = 0;
+		minSector = stuff->minSector;
 		if ( (hints=stuff->hints) )
 		{
 			int hintIdx;
@@ -63,8 +68,8 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 				/* A hint was provided. So see if there is a connecting section */
 				if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_FREE) )
 				{
-					pr_info("mgwfsFindFree(): Looking for 0x%X sector%s. Hint=0x%08X/0x%X. Contigious sector=0x%08X\n",
-							numSectors, numSectors == 1 ? "" : "s", hints->start, hints->nblocks, contigiousSector);
+					pr_info("mgwfsFindFree(): Looking for 0x%X (%d) sector%s. Hint=0x%08X/0x%X. Contigious sector=0x%08X\n",
+							numSectors, numSectors, numSectors == 1 ? "" : "s", hints->start, hints->nblocks, contigiousSector);
 				}
 				src = ourSuper->freeMap;
 				for ( ii = 0; ii < stuff->currListAlloc; ++ii, ++src )
@@ -86,8 +91,8 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 							/* remove the existing section completely */
 							memmove(src, src + 1, (stuff->currListAlloc - ii) * sizeof(FsysRetPtr));
 							memset(ourSuper->freeMap + stuff->currListAlloc - 1, 0, sizeof(FsysRetPtr));
+							--stuff->allocChange;
 						}
-						stuff->updatedEntryIndex = ii;
 						ourSuper->freeListDirty = 1;
 						return 1;   /* something changed */
 					}
@@ -97,16 +102,25 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 		/* Did not find anything we can add contigious to an existing section */
 		if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_FREE) )
 		{
-			pr_info("mgwfsFindFree(): Looking for 0x%X sector%s from anywhere.\n",
-					numSectors, numSectors == 1 ? "" : "s");
+			char txt[128];
+			if ( minSector )
+				snprintf(txt, sizeof(txt), "from at least minSector=0x%08X", minSector);
+			else
+				strncpy(txt,"from anywhere",sizeof(txt));
+			pr_info("mgwfsFindFree(): Looking for 0x%X (%d) sector%s %s\n",
+					numSectors, numSectors, numSectors == 1 ? "" : "s", txt);
 		}
 		src = ourSuper->freeMap;
 		for ( ii = 0; ii < stuff->currListAlloc; ++ii, ++src )
 		{
 			if ( !src->start )
 				break;
+			if ( minSector && minSector >= src->start + src->nblocks )
+				continue;
 			if ( src->nblocks == numSectors )
 			{
+				if ( minSector && minSector != src->start )
+					continue;
 				/* we found a section with the requested number of sectors exactly */
 				/* we can just clip off all of the new sectors from the current section */
 				stuff->result.start = src->start;
@@ -114,7 +128,7 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 				/* remove the existing section completely */
 				memmove(src, src + 1, (stuff->currListAlloc - ii) * sizeof(FsysRetPtr));
 				memset(ourSuper->freeMap + stuff->currListAlloc - 1, 0, sizeof(FsysRetPtr));
-				stuff->updatedEntryIndex = ii;
+				--stuff->allocChange;
 				ourSuper->freeListDirty = 1;
 				return 1;   /* something changed */
 			}
@@ -124,18 +138,68 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 		{
 			if ( !src->start )
 				break;
-			if ( src->nblocks > numSectors )
+			if ( minSector && minSector >= src->start+src->nblocks )
+				continue;
+			if ( minSector && minSector >= src->start )
 			{
-				/* we found a section with at least the requested number of sectors */
-				/* we can just clip off the new sectors from the current section */
-				stuff->result.start = src->start;
-				stuff->result.nblocks = numSectors;
-				src->start += numSectors;
-				src->nblocks -= numSectors;
-				stuff->updatedEntryIndex = ii;
-				ourSuper->freeListDirty = 1;
-				return 1;   /* something changed */
+				uint32_t tnblocks;
+				tnblocks = src->nblocks - (minSector - src->start);
+				if ( tnblocks >= numSectors )
+				{
+					/* we found a section with at least the requested number of sectors */
+					if ( minSector == src->start )
+					{
+						/* we can just clip off the new sectors from the current section */
+						src->start += numSectors;
+						src->nblocks -= numSectors;
+					}
+					else
+					{
+						if ( minSector + numSectors != src->start + src->nblocks )
+						{
+							/* we have to insert an entry */
+							src1 = src + 1;
+							/* make room for one more */
+							memmove(src1, src, (stuff->currListAlloc - ii - 1) * sizeof(FsysRetPtr));
+							/* Leave start as is but reduce size of area in front */
+							src1->start = minSector+numSectors;
+							src1->nblocks = (src->start + src->nblocks) - (minSector+numSectors);
+							src->nblocks = minSector-src->start;
+							++stuff->allocChange;
+						}
+						else
+						{
+							src->nblocks -= numSectors;
+						}
+					}
+					stuff->result.start = minSector;
+					stuff->result.nblocks = numSectors;
+					ourSuper->freeListDirty = 1;
+					return 1;   /* something changed */
+				}
 			}
+			else
+			{
+				if ( src->nblocks >= numSectors )
+				{
+					/* we found a section with at least the requested number of sectors */
+					/* we can just clip off the new sectors from the current section */
+					stuff->result.start = src->start;
+					stuff->result.nblocks = numSectors;
+					src->start += numSectors;
+					src->nblocks -= numSectors;
+					ourSuper->freeListDirty = 1;
+					return 1;   /* something changed */
+				}
+			}
+		}
+		if ( minSector )
+		{
+			/* Didn't find anything close, so try the whole thing again without a minSector */
+			if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_FREE) )
+				pr_info("mgwfs_findfree(): Did not find anything on or after 0x%08X of the right size. Trying again without minSector ...\n", minSector);
+			stuff->minSector = 0;
+			return mgwfsFindFree(ourSuper,stuff,numSectors);
 		}
 		src = ourSuper->freeMap;
 		leastDiffIdx = 0;
@@ -160,8 +224,8 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 			/* remove the found section completely */
 			memmove(src, src + 1, (stuff->currListAlloc - leastDiffIdx) * sizeof(FsysRetPtr));
 			memset(ourSuper->freeMap + stuff->currListAlloc - 1, 0, sizeof(FsysRetPtr));
-			stuff->updatedEntryIndex = leastDiffIdx;
 			ourSuper->freeListDirty = 1;
+			--stuff->allocChange;
 			return 1;   /* something changed */
 		}
 	}
@@ -179,6 +243,7 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 		FsysRetPtr *src1;
 		uint32_t endRetSector = retp->start + retp->nblocks;
 
+		stuff->allocChange = 0;
 		/* Look through the list to see if there is a connection front or back */
 		src = ourSuper->freeMap;
 		if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_FREE) )
@@ -199,7 +264,6 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 				src->start = retp->start;
 				src->nblocks += retp->nblocks;
 				ourSuper->freeListDirty = 1;
-				stuff->updatedEntryIndex = ii;
 				if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_FREE) )
 					pr_info("mgwsFreeSectors(): Free'd in front of entry %d to 0x%08X-0x%08X (0x%X)\n", ii, src->start, src->start + src->nblocks - 1, src->nblocks);
 				return 1;
@@ -228,14 +292,16 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 					numMove = stuff->currListAlloc - ii - 2;
 					/* Delete an entry as long as it's not the last */
 					if ( numMove > 0 )
+					{
 						memmove(src1, src1 + 1, numMove * sizeof(FsysRetPtr));
+						--stuff->allocChange;
+					}
 					src1 = ourSuper->freeMap + stuff->currListAlloc - 1;
 					/* The last one gets 0's */
 					src1->start = 0;
 					src1->nblocks = 0;
 				}
 				ourSuper->freeListDirty = 1;
-				stuff->updatedEntryIndex = ii;
 				if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_FREE) )
 					pr_info("mgwsFreeSectors(): Free'd behind entry %d to 0x%08X-0x%08X (0x%X)\n", ii, src->start, src->start + src->nblocks - 1, src->nblocks);
 				return 1;
@@ -264,7 +330,7 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 		src->start = retp->start;
 		src->nblocks = retp->nblocks;
 		ourSuper->freeListDirty = 1;
-		stuff->addedEntryIndex = ii;
+		++stuff->allocChange;
 		if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_FREE) )
 			pr_info("mgwsFreeSectors(): Added new last %d of 0x%08X-0x%08X (0x%X)\n", ii, src->start, src->start + src->nblocks - 1, src->nblocks);
 		return 1;
@@ -300,18 +366,22 @@ static int help_em(const char *title)
 	return 1;
 }
 
+#define MAX_RESULTS (10)
+
 int main(int argc, char **argv)
 {
-	int opt, alts=1;
+	int opt, alts=1, resIdx, allocChange;
 	int numSectors, allocated;
 	char *endp;
 	FsysRetPtr retSec, hints[FSYS_MAX_FHPTRS];
 	MgwfsFoundFreeMap_t found;
 	MgwfsSuper_t super;
-
+	FsysRetPtr results[MAX_RESULTS];
+	
 	memset(&found, 0, sizeof(found));
 	memset(&super, 0, sizeof(super));
 	memset(&hints, 0, sizeof(hints));
+	memset(results,0, sizeof(results));
 	found.hints = hints;
 	retSec.nblocks = 0;
 	retSec.start = 0;
@@ -390,32 +460,42 @@ int main(int argc, char **argv)
 	found.currListAlloc = sizeof(sampleFreeMap) / sizeof(FsysRetPtr);
 	super.freeMap = sampleFreeMap;
 	if ( super.flags )
-		mgwfsDumpFreeMap("Before:", sampleFreeMap);
+		mgwfsDumpFreeMap("Freelist Before:", sampleFreeMap);
 	allocated = 0;
 	if ( retSec.start )
 	{
 		mgwfsFreeSectors(&super, &found, &retSec);
 		if ( super.flags )
-			mgwfsDumpFreeMap("After Free:", sampleFreeMap);
+			mgwfsDumpFreeMap("Freelist after sectors free'd:", sampleFreeMap);
 	}
+	resIdx = 0;
+	allocChange = 0;
 	while ( allocated < numSectors )
 	{
-		if ( mgwfsFindFree(&super, &found, numSectors) )
+		if ( mgwfsFindFree(&super, &found, numSectors-allocated) )
 		{
 			allocated += found.result.nblocks;
+			allocChange += found.allocChange;
+			if ( resIdx < MAX_RESULTS-1 )
+			{
+				results[resIdx].nblocks = found.result.nblocks;
+				results[resIdx].start = found.result.start;
+			}
 			if ( super.flags )
 			{
-				printf("Asked for %d sector%s. (hint=0x%08X) Found %d at 0x%08X (updIndex=%d, addedIdx=%d, allocated=%d)\n",
+				printf("Asked for %d sector%s. (hint=0x%08X) Found 0x%08X-0x%08X (0x%08X [%d] sectors; allocChange=%d, allocated=%d)\n",
 					   numSectors,
 					   numSectors == 1 ? "" : "s",
 					   found.hints[0].start,
-					   found.result.nblocks,
 					   found.result.start,
-					   found.updatedEntryIndex,
-					   found.addedEntryIndex,
+					   found.result.start+found.result.nblocks-1,
+					   found.result.nblocks,
+					   found.result.nblocks,
+					   found.allocChange,
 					   allocated);
 			}
 			found.hints[0].start = 0;
+			++resIdx;
 		}
 		else
 		{
@@ -425,8 +505,9 @@ int main(int argc, char **argv)
 	}
 	if ( super.flags )
 	{
-		printf("Total allocated: %d\n", allocated);
-		mgwfsDumpFreeMap("After:", sampleFreeMap);
+		printf("Total allocated: %d, allocChange=%d\n", allocated, allocChange);
+		mgwfsDumpFreeMap("Freelist After:", sampleFreeMap);
+		mgwfsDumpFreeMap("Memory Allocated:", results);
 	}
 	return 0;
 }

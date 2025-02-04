@@ -119,7 +119,7 @@ static void dumpFreeList( const char *title, const FreeList_t *list )
 typedef struct
 {
 	FreeList_t *currList;	/* Pointer to current list of entries */
-	int currListAlloc;		/* maximum number of entries in list */
+	int listUsed;		/* maximum number of entries in list */
 	int updatedEntryIndex;	/* index of entry updated */
 	int addedEntryIndex;	/* index of entry added */
 	int dirty;				/* boolean indicating area has been modified */
@@ -148,7 +148,7 @@ static int findFree(FoundFreeList_t *stuff, int numSectors )
 					   numSectors, numSectors == 1 ? "":"s", stuff->hint.sector, stuff->hint.numSectors, contigiousSector );
 			}
 			src = stuff->currList;
-			for (ii=0; ii < stuff->currListAlloc; ++ii, ++src)
+			for (ii=0; ii < stuff->listUsed; ++ii, ++src)
 			{
 				if ( !src->sector || !src->numSectors )
 					break;
@@ -165,8 +165,8 @@ static int findFree(FoundFreeList_t *stuff, int numSectors )
 					if ( !(src->numSectors -= num) )
 					{
 						/* remove the existing section completely */
-						memmove(src, src + 1, (stuff->currListAlloc-ii)*sizeof(FreeList_t));
-						memset(stuff->currList+stuff->currListAlloc-1,0,sizeof(FreeList_t));
+						memmove(src, src + 1, (stuff->listUsed-ii)*sizeof(FreeList_t));
+						memset(stuff->currList+stuff->listUsed-1,0,sizeof(FreeList_t));
 					}
 					stuff->updatedEntryIndex = ii;
 					stuff->dirty = 1;
@@ -181,7 +181,7 @@ static int findFree(FoundFreeList_t *stuff, int numSectors )
 				   numSectors, numSectors == 1 ? "":"s");
 		}
 		src = stuff->currList;
-		for (ii=0; ii < stuff->currListAlloc; ++ii, ++src)
+		for (ii=0; ii < stuff->listUsed; ++ii, ++src)
 		{
 			if ( !src->sector )
 				break;
@@ -192,15 +192,15 @@ static int findFree(FoundFreeList_t *stuff, int numSectors )
 				stuff->result.sector = src->sector;
 				stuff->result.numSectors = numSectors;
 				/* remove the existing section completely */
-				memmove(src, src + 1, (stuff->currListAlloc-ii)*sizeof(FreeList_t));
-				memset(stuff->currList+stuff->currListAlloc-1,0,sizeof(FreeList_t));
+				memmove(src, src + 1, (stuff->listUsed-ii)*sizeof(FreeList_t));
+				memset(stuff->currList+stuff->listUsed-1,0,sizeof(FreeList_t));
 				stuff->updatedEntryIndex = ii;
 				stuff->dirty = 1;
 				return 1;	/* something changed */
 			}
 		}
 		src = stuff->currList;
-		for (ii=0; ii < stuff->currListAlloc; ++ii, ++src)
+		for (ii=0; ii < stuff->listUsed; ++ii, ++src)
 		{
 			if ( !src->sector )
 				break;
@@ -220,7 +220,7 @@ static int findFree(FoundFreeList_t *stuff, int numSectors )
 		src = stuff->currList;
 		leastDiffIdx = 0;
 		leastDiff = 0x00FFFFFF;
-		for (ii=0; ii < stuff->currListAlloc; ++ii, ++src)
+		for (ii=0; ii < stuff->listUsed; ++ii, ++src)
 		{
 			if ( !src->sector )
 				break;
@@ -238,8 +238,8 @@ static int findFree(FoundFreeList_t *stuff, int numSectors )
 			stuff->result.sector = src->sector;
 			stuff->result.numSectors = src->numSectors;
 			/* remove the found section completely */
-			memmove(src, src + 1, (stuff->currListAlloc-leastDiffIdx)*sizeof(FreeList_t));
-			memset(stuff->currList+stuff->currListAlloc-1,0,sizeof(FreeList_t));
+			memmove(src, src + 1, (stuff->listUsed-leastDiffIdx)*sizeof(FreeList_t));
+			memset(stuff->currList+stuff->listUsed-1,0,sizeof(FreeList_t));
 			stuff->updatedEntryIndex = leastDiffIdx;
 			stuff->dirty = 1;
 			return 1;	/* something changed */
@@ -263,7 +263,7 @@ static int freeSectors(FoundFreeList_t *stuff, FreeList_t *retp)
 		src = stuff->currList;
 		if ( stuff->verbose )
 			printf("Freeing 0x%08X-0x%08X (0x%X) sectors\n", retp->sector, retp->sector + retp->numSectors - 1, retp->numSectors);
-		for ( ii = 0; src->sector && src->numSectors && ii < stuff->currListAlloc; ++ii, ++src )
+		for ( ii = 0; src->sector && src->numSectors && ii < stuff->listUsed; ++ii, ++src )
 		{
 			uint32_t srcEnd;
 
@@ -306,11 +306,11 @@ static int freeSectors(FoundFreeList_t *stuff, FreeList_t *retp)
 							   ii + 1, src1->sector, src1->sector + src1->numSectors-1,
 							   src->sector, src->sector + src->numSectors + src1->numSectors-1);
 					src->numSectors += src1->numSectors;
-					numMove = stuff->currListAlloc-ii-2;
+					numMove = stuff->listUsed-ii-2;
 					/* Delete an entry as long as it's not the last */
 					if ( numMove > 0 )
 						memmove(src1, src1 + 1, numMove * sizeof(FreeList_t));
-					src1 = stuff->currList + stuff->currListAlloc-1;
+					src1 = stuff->currList + stuff->listUsed-1;
 					/* The last one gets 0's */
 					src1->sector = 0;
 					src1->numSectors = 0;
@@ -333,14 +333,14 @@ static int freeSectors(FoundFreeList_t *stuff, FreeList_t *retp)
 #endif
 		}
 		/* Did not find anything so we need to insert a new entry at entry ii */
-		if ( ii >= stuff->currListAlloc )
+		if ( ii >= stuff->listUsed )
 		{
-			printf("No room to add new free entry. ii=%d, currListAlloc=%d\n",
-				   ii, stuff->currListAlloc);
+			printf("No room to add new free entry. ii=%d, listUsed=%d\n",
+				   ii, stuff->listUsed);
 			return 0;
 		}
 		src = stuff->currList + ii;
-		memmove(src+1,src,(stuff->currListAlloc-ii)*sizeof(FreeList_t));
+		memmove(src+1,src,(stuff->listUsed-ii)*sizeof(FreeList_t));
 		src->sector = retp->sector;
 		src->numSectors = retp->numSectors;
 		stuff->dirty = 1;
@@ -423,7 +423,7 @@ int main(int argc, char **argv)
 		fprintf(stderr,"Bad argument for -n: '%s'\n", argv[optind]);
 		return 1;
 	}
-	found.currListAlloc = sizeof(sampleFreeList)/sizeof(FreeList_t);
+	found.listUsed = sizeof(sampleFreeList)/sizeof(FreeList_t);
 	found.currList = sampleFreeList;
 	if ( found.verbose )
 		dumpFreeList("Before:",sampleFreeList);

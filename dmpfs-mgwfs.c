@@ -539,15 +539,17 @@ static void verifyFreemap(int fd, uint32_t *fileContents, int idxEntries, FsysRe
 	memset(&found,0,sizeof(found));
 	super.freeMapHdr.size = 0;
 	super.freeMapHdr.clusters = 512;
-	found.currListAlloc = (super.freeMapHdr.clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
-	ourFreeMap = (FsysRetPtr *)calloc(found.currListAlloc,sizeof(FsysRetPtr));
+	super.freeMapEntriesAvail = (super.freeMapHdr.clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
+	ourFreeMap = (FsysRetPtr *)calloc(super.freeMapEntriesAvail,sizeof(FsysRetPtr));
 	super.freeMap = ourFreeMap;
 	/* Prepopulate the "used" list with the home block usage */
 	for (idx=0; idx < FSYS_MAX_ALTS; ++idx)
 	{
-		super.freeMap[idx].nblocks = 1;
-		super.freeMap[idx].start = FSYS_HB_ALG(idx,FSYS_HB_RANGE);
+		ourFreeMap[idx].nblocks = 1;
+		ourFreeMap[idx].start = FSYS_HB_ALG(idx,FSYS_HB_RANGE);
 	}
+	found.listAvailable = super.freeMapEntriesAvail;
+	found.listUsed = FSYS_MAX_ALTS;
 	verbose = 0;
 	/* Populate the rest of the used list by reading all the file headers */
 	hdrType = FSYS_ID_INDEX;
@@ -583,21 +585,22 @@ static void verifyFreemap(int fd, uint32_t *fileContents, int idxEntries, FsysRe
 		hdrType = FSYS_ID_HEADER;
 	}
 	verbose = verbSave;
-	dumpFreemap("Contents of \"used\" blocks before merge:", ourFreeMap, found.currListAlloc);
+	dumpFreemap("Contents of \"used\" blocks before merge:", ourFreeMap, found.listUsed);
 	rp = ourFreeMap;
-	rpMax = ourFreeMap+found.currListAlloc;
+	rpMax = ourFreeMap + super.freeMapEntriesAvail;
 	/* Swap freemap pointer */
 	super.freeMap = freemapFileContents;
 	super.freeMapHdr = *freeMapHdr;
-	found.currListAlloc = (freeMapHdr->clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
-	printf("Total entries available for used list: %ld, for free list: %d\n", rpMax-rp, found.currListAlloc);
+	found.listAvailable = (freeMapHdr->clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
+	found.listUsed = found.listAvailable;
+	printf("Total entries available for used list: %ld, for free list: %d\n", rpMax-rp, found.listAvailable);
 	while ( rp < rpMax && rp->start && rp->nblocks )
 	{
 		mgwfsFreeSectors(&super,&found,rp);
 		++rp;
 	}
 	printf("Free'd a total of %ld used entries\nThe following should have just one entry from 0x01 to 0x%08X\n", rp-ourFreeMap, maxLBA-1);
-	dumpFreemap("Contents of freemap.sys after merge:", freemapFileContents, found.currListAlloc);
+	dumpFreemap("Contents of freemap.sys after merge:", freemapFileContents, found.listUsed);
 	free(ourFreeMap);
 }
 

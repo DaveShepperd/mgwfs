@@ -60,14 +60,14 @@ int mgwfs_readdir(struct file *dirp, struct dir_context *ctx)
 
 	if ( !(dirContents = ourInode->contentsPtr) )
 	{
-		dirContents = (uint8_t*)kzalloc(ourInode->size,GFP_KERNEL);
+		dirContents = (uint8_t*)kzalloc(ourInode->fsHeader.size,GFP_KERNEL);
 		if ( !dirContents )
 		{
 			printk(KERN_ERR "mgwfs_readdir(): Out of memory allocating %d bytes for directory file %s (fid=%d).\n",
-				   ourInode->size, ourInode->fileName ? ourInode->fileName : "<unknown>", ourInode->inode_no);
+				   ourInode->fsHeader.size, ourInode->fileName ? ourInode->fileName : "<unknown>", ourInode->inode_no);
 			return 0;
 		}
-		if ( !mgwfs_readFile(sb,ourInode->fileName,dirContents,ourInode->size,ourInode->pointers[0],0))
+		if ( !mgwfs_readFile(sb,ourInode->fileName,dirContents,ourInode->fsHeader.size,ourInode->fsHeader.pointers[0],0))
 		{
 			kfree(dirContents);
 			printk(KERN_ERR "mgwfs_readdir(): Failed to read directory contents of %s (fid=%d).\n",
@@ -78,7 +78,7 @@ int mgwfs_readdir(struct file *dirp, struct dir_context *ctx)
 	}
 	dirEnt = 0;
 	/* dircontents is always pointing to next directory entry */
-	while ( dirContents < dirContents+ourInode->size )
+	while ( dirContents < dirContents+ourInode->fsHeader.size )
 	{
 		int txtLen, skipDots;
 		uint8_t gen;

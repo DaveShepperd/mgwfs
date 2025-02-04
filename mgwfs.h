@@ -29,11 +29,15 @@ typedef struct
 	void *contentsPtr;	/* pointer to file contents (used if type dir) */
 	char *fileName;		/* pointer to filename once found */
 	MgwfsBlock_t buffer;
+	FsysHeader fsHeader;
+#if 0
 	uint32_t size;		/* file size in bytes */
 	uint32_t clusters;	/* number of clusters allocated for this file */
 	uint32_t ctime;		/* file creation time */
 	uint32_t mtime;		/* file modification time */
+	uint8_t generation;
 	FsysRetPtr pointers[FSYS_MAX_ALTS][FSYS_MAX_FHPTRS]; /* retrieval pointers */
+#endif
 } MgwfsInode_t;
 
 #define MGWFS_MNT_OPT_ALLOCATION	1
@@ -58,7 +62,8 @@ typedef struct MgwfsSuper_t
 	int indexFHDirty;		/* flag indicating index file header is dirty */
 	int indexSysDirty;		/* flag indicating index.sys contents is dirty */
 	FsysHeader freeMapHdr;	/* copy of file header of freemap.sys */
-	int freeMapEntries;		/* Number of entries in freemap */
+	int freeMapEntriesUsed;	/* Number of entries used in freemap */
+	int freeMapEntriesAvail;/* Maximum number of freemap entries available */
 	FsysRetPtr *freeMap;	/* contents of freemap.sys */
 	int freeListFHDirty;	/* flag indicating freeMapHdr is dirty */
 	int freeListDirty;		/* flag indicating freelist contents is dirty */
@@ -80,9 +85,8 @@ typedef struct
 	FsysRetPtr result;		/* newly formed selection */
 	FsysRetPtr *hints;		/* hint of what to connect to if possible */
 	uint32_t minSector;		/* minimum sector to look for */
-	int currListAlloc;		/* maximum number of entries in list */
-//	int updatedEntryIndex;	/* index of entry updated */
-//	int addedEntryIndex;	/* index of entry added */
+	int listUsed;			/* number of entries in list used */
+	int listAvailable;		/* number of entries in list available */
 	int allocChange;		/* number of entries added or deleted */
 } MgwfsFoundFreeMap_t;
 

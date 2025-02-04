@@ -82,9 +82,11 @@ uint8_t *mgwfs_getSector(struct super_block *sb, MgwfsBlock_t *buffP, sector_t s
 }
 
 /*
- * I wish there was a better way to do this, but it looks like all writes
- * of single sectors have to be done via a read-modify-write cycle. No matter, nobody is
- * ever going to use this driver so it doesn't have to be fast or efficient.
+ * There must be a better way to do this, but it looks like all writes
+ * of single sectors have to be done via a read-modify-write cycle. I
+ * could never get the __bread() function to work so I doubted the __bwrite()
+ * function would work either. No matter, nobody is ever going to use this
+ * driver so it doesn't have to be fast or efficient.
  */
 void mgwfs_putSector(struct super_block *sb, const uint8_t *ptr, sector_t sector)
 {
@@ -675,10 +677,12 @@ static int getOurSuper(struct super_block *sb)
 			}
 			else
 			{
-				FsysRetPtr *rp = ourSuper->freeMap, *rpMax = ourSuper->freeMap + (ourSuper->freeMapHdr.clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr)-1;
+				int maxEntries = (ourSuper->freeMapHdr.clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
+				FsysRetPtr *rp = ourSuper->freeMap, *rpMax = ourSuper->freeMap + maxEntries - 1;
 				while ( rp < rpMax && rp->nblocks && rp->start )
 					++rp;
-				ourSuper->freeMapEntries = rp-ourSuper->freeMap;
+				ourSuper->freeMapEntriesUsed = rp-ourSuper->freeMap;
+				ourSuper->freeMapEntriesAvail = rpMax-ourSuper->freeMap;
 			}
 		}
 		else

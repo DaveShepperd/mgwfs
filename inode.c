@@ -34,15 +34,15 @@ void mgwfs_fill_inode(struct super_block *sb, struct inode *inode,
 	MgwfsSuper_t *ourSuper = MGWFS_SB(sb);
 	int fnLen;
 	inode->i_mode = ourInode->mode;
-	inode->i_size = ourInode->size;
+	inode->i_size = ourInode->fsHeader.size;
 	inode->i_sb = sb;
 	inode->i_ino = ourInode->inode_no;
 	inode->i_op = &mgwfs_inode_ops;
 	inode_set_atime_to_ts(inode, current_time(inode));
 	ts.tv_nsec = 0;
-	ts.tv_sec = ourInode->mtime;
+	ts.tv_sec = ourInode->fsHeader.mtime;
 	inode_set_mtime_to_ts(inode, ts);
-	ts.tv_sec = ourInode->ctime;
+	ts.tv_sec = ourInode->fsHeader.ctime;
 	inode_set_ctime_to_ts(inode, ts);
 	if ( fName && (fnLen=strlen(fName)) )
 	{
@@ -83,12 +83,24 @@ int mgwfs_alloc_mgwfs_inode(struct super_block *sb, uint64_t *out_inode_no, umod
 	MgwfsSuper_t *ourSuper;
 	MgwfsFoundFreeMap_t freeStuff;
 	FsysHeader tmpHdr;
-	int idx;
+	int idx, freeThem=0;
 	uint32_t fid, *indexSys, *indexSysMax;
 	struct timespec64 ts;
 	
-	memset(&freeStuff,0,sizeof(freeStuff));
 	ourSuper = MGWFS_SB(sb);
+	memset(&freeStuff,0,sizeof(freeStuff));
+
+	memset(&tmpHdr, 0, sizeof(tmpHdr));
+	tmpHdr.generation = 1;
+	ktime_get_ts64(&ts);
+	tmpHdr.ctime = ts.tv_sec&0xFFFFFFFF;
+	tmpHdr.mtime = tmpHdr.ctime;
+	tmpHdr.id = FSYS_ID_HEADER;
+	tmpHdr.clusters = ourSuper->defaultAllocation;
+	tmpHdr.size = 0;
+	tmpHdr.type = (mode&S_IFDIR) ? FSYS_TYPE_DIR : FSYS_TYPE_FILE;
+
+	*out_inode_no = 0;		/* Assume no new FID */
 
 	mutex_lock(&mgwfs_sb_lock);
 
@@ -98,50 +110,69 @@ int mgwfs_alloc_mgwfs_inode(struct super_block *sb, uint64_t *out_inode_no, umod
 		indexSys += FSYS_MAX_ALTS;
 	if ( indexSys >= indexSysMax )
 	{
+		/* No entries left. This could actually be fixed by just extending the index.sys file
+		 * but for now, we just say tough mc-noogies. No more room.
+		 */
 		mutex_unlock(&mgwfs_sb_lock);
 		return -ENOSPC;
 	}
-	fid = indexSys-ourSuper->indexSys;
-	freeStuff.currListAlloc = (ourSuper->freeMapHdr.clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
+	fid = (indexSys-ourSuper->indexSys)/FSYS_MAX_ALTS;
+	freeStuff.listAvailable = ourSuper->freeMapEntriesAvail;
+	freeStuff.listUsed = ourSuper->freeMapEntriesUsed;
 	for (idx=0; idx < FSYS_MAX_ALTS; ++idx)
 	{
 		freeStuff.minSector = FSYS_HB_ALG(idx, FSYS_HB_RANGE);
-		if ( mgwfsFindFree(ourSuper, &freeStuff, 1) )
+		freeStuff.hints = NULL;
+		if ( !mgwfsFindFree(ourSuper, &freeStuff, 1) )
 		{
-			/* We've allocated a sector for the file header */
-			indexSys[idx] = freeStuff.result.start;
-			ourSuper->freeMapEntries += freeStuff.allocChange;
+			freeThem = 1;
+			break;
 		}
-		else
+		/* We've allocated a sector for the file header */
+		indexSys[idx] = freeStuff.result.start;
+		ourSuper->freeMapEntriesUsed += freeStuff.allocChange;
+		if ( idx < ourSuper->defaultCopies )
 		{
-			int nope;
-			/* Ran out of room for file headers */
-			/* Just for grins and chuckles, free any we previously allocated */
-			for (nope=0; nope < idx; ++nope)
+			freeStuff.hints = &freeStuff.result;
+			freeStuff.minSector = 0;
+			if ( !mgwfsFindFree(ourSuper, &freeStuff, tmpHdr.clusters) )
 			{
-				freeStuff.result.nblocks = 1;
-				freeStuff.result.start = indexSys[nope];
-				mgwfsFreeSectors(ourSuper,&freeStuff,&freeStuff.result);
-				ourSuper->freeMapEntries += freeStuff.allocChange;
-				indexSys[nope] = FSYS_EMPTYLBA_BIT|1;
+				freeThem = 1;
+				break;
 			}
-			mutex_unlock(&mgwfs_sb_lock);
-			return -ENOSPC;		/* No room at the inn */
+			tmpHdr.pointers[idx][0].nblocks = freeStuff.result.nblocks;
+			tmpHdr.pointers[idx][0].start = freeStuff.result.start;
 		}
 	}
-	memset(&tmpHdr,0,sizeof(tmpHdr));
-	tmpHdr.generation = 1;
-	ktime_get_ts64(&ts);
-	tmpHdr.ctime = ts.tv_sec&0xFFFFFFFF;
-	tmpHdr.mtime = ts.tv_sec&0xFFFFFFFF;
-	tmpHdr.id = FSYS_ID_HEADER;
-	tmpHdr.size = 0;
-	tmpHdr.type = (mode&S_IFDIR) ? FSYS_TYPE_DIR : FSYS_TYPE_FILE;
+	if ( freeThem )
+	{
+		/* Ran out of room for file headers or space for file */
+		/* free any we previously allocated */
+		for (idx=0; idx < FSYS_MAX_ALTS; ++idx)
+		{
+			if ( (*indexSys&FSYS_EMPTYLBA_BIT) )
+				break;
+			freeStuff.result.nblocks = 1;
+			freeStuff.result.start = indexSys[idx];
+			mgwfsFreeSectors(ourSuper,&freeStuff,&freeStuff.result);
+			ourSuper->freeMapEntriesUsed += freeStuff.allocChange;
+			indexSys[idx] = FSYS_EMPTYLBA_BIT|1;
+			if ( tmpHdr.pointers[idx][0].nblocks )
+			{
+				mgwfsFreeSectors(ourSuper,&freeStuff,&tmpHdr.pointers[idx][0]);
+				ourSuper->freeMapEntriesUsed += freeStuff.allocChange;
+			}
+		}
+		mutex_unlock(&mgwfs_sb_lock);
+		return -ENOSPC;		/* No room at the inn */
+	}
+	/* Write the file header */
 	for (idx=0; idx < FSYS_MAX_ALTS; ++idx)
 	{
 		mgwfs_putSector(sb,(uint8_t*)&tmpHdr,indexSys[idx]);
 	}
 	mutex_unlock(&mgwfs_sb_lock);
+	*out_inode_no = fid;				/* Return the file id of the new entry */
 	return 0;
 }
 
@@ -149,52 +180,54 @@ MgwfsInode_t* mgwfs_get_mgwfs_inode(struct super_block *sb, uint32_t inode_no, i
 {
 	MgwfsSuper_t *ourSuper = (MgwfsSuper_t *)sb->s_fs_info;
 	MgwfsInode_t *ourInode=NULL;
-	FsysHeader hdr;
-
-	if ( mgwfs_getFileHeader(sb, fileName, FSYS_ID_HEADER, inode_no, ourSuper->indexSys + inode_no * FSYS_MAX_ALTS, &hdr) )
+	FsysHeader *hdr;
+	
+	ourInode = (MgwfsInode_t *)kmem_cache_alloc(mgwfs_inode_cache, GFP_KERNEL);
+	memset(ourInode,0,sizeof(MgwfsInode_t));
+	hdr = &ourInode->fsHeader;
+	if ( mgwfs_getFileHeader(sb, fileName, FSYS_ID_HEADER, inode_no, ourSuper->indexSys + inode_no * FSYS_MAX_ALTS, hdr) )
 	{
-		if ( !generation || hdr.generation == generation )
+		if ( !generation || hdr->generation == generation )
 		{
-			ourInode = (MgwfsInode_t *)kmem_cache_alloc(mgwfs_inode_cache, GFP_KERNEL);
-			memset(ourInode,0,sizeof(MgwfsInode_t));
-			ourInode->clusters = hdr.clusters;
-			ourInode->ctime = hdr.ctime;
 			ourInode->inode_no = inode_no;
-			ourInode->mode = (hdr.type == FSYS_TYPE_DIR) ? S_IFDIR|0555:S_IFREG|0444;
-			ourInode->mtime = hdr.mtime;
-			memcpy(ourInode->pointers,hdr.pointers,sizeof(ourInode->pointers));
-			ourInode->size = hdr.size;
+			ourInode->mode = (hdr->type == FSYS_TYPE_DIR) ? S_IFDIR|0555:S_IFREG|0444;
 		}
 		else
+		{
 			pr_err("mgwfs_get_mgwfs_inode(): Failed generation match. Generation=%d, hdr.generation=%d\n",
-				   generation, hdr.generation);
+				   generation, hdr->generation);
+			kmem_cache_free(mgwfs_inode_cache,ourInode);
+			ourInode = NULL;
+		}
 	}
 	else
+	{
 		pr_err("mgwfs_get_mgwfs_inode(): Failed mgwfs_getFileHeader(,'%s',,%d,...). Generation=%d\n",
 			   fileName, inode_no, generation );
+		kmem_cache_free(mgwfs_inode_cache,ourInode);
+		ourInode = NULL;
+	}
 	return ourInode;
 }
 
-#if 0
-void mgwfs_save_mgwfs_inode(struct super_block *sb,
-							struct mgwfs_inode *inode_buf)
+void mgwfs_save_mgwfs_inode(struct super_block *sb, MgwfsInode_t *inode)
 {
-	struct buffer_head *bh;
-	struct mgwfs_inode *inode;
-	uint64_t inode_no;
-
-	inode_no = inode_buf->inode_no;
-	bh = sb_bread(sb, MGWFS_INODE_TABLE_START_BLOCK_NO + MGWFS_INODE_BLOCK_OFFSET(sb, inode_no));
-	BUG_ON(!bh);
-
-	inode = (struct mgwfs_inode *)(bh->b_data + MGWFS_INODE_BYTE_OFFSET(sb, inode_no));
-	memcpy(inode, inode_buf, sizeof(*inode));
-
-	mark_buffer_dirty(bh);
-	sync_dirty_buffer(bh);
-	brelse(bh);
+	MgwfsSuper_t *ourSuper;
+	uint32_t *indexSys;
+	int ii;
+	struct timespec64 ts;
+	
+	ourSuper = MGWFS_SB(sb);
+	indexSys = ourSuper->indexSys+inode->inode_no*FSYS_MAX_ALTS;
+	ktime_get_ts64(&ts);
+	inode->fsHeader.mtime = ts.tv_sec & 0xFFFFFFFF;
+	for (ii=0; ii < FSYS_MAX_ALTS; ++ii, ++indexSys)
+	{
+		mgwfs_putSector(sb, (uint8_t *)&inode->fsHeader, *indexSys);
+	}
 }
 
+#if 0
 int mgwfs_add_dir_record(struct super_block *sb, struct inode *dir,
 						 struct dentry *dentry, struct inode *inode)
 {
@@ -381,14 +414,14 @@ struct dentry* mgwfs_lookup(struct inode *dir,
 	}
 	if ( !(dirContents = parentInode->contentsPtr) )
 	{
-		dirContents = (uint8_t*)kzalloc(parentInode->size,GFP_KERNEL);
+		dirContents = (uint8_t*)kzalloc(parentInode->fsHeader.size,GFP_KERNEL);
 		if ( !dirContents )
 		{
 			printk(KERN_ERR "mgwfs_lookup(): Out of memory allocating %d bytes for directory file %s (fid=%d).\n",
-				   parentInode->size, parentInode->fileName ? parentInode->fileName : "<unknown>", parentInode->inode_no);
+				   parentInode->fsHeader.size, parentInode->fileName ? parentInode->fileName : "<unknown>", parentInode->inode_no);
 			return NULL;
 		}
-		if ( !mgwfs_readFile(sb,child_dentry->d_name.name,dirContents,parentInode->size,parentInode->pointers[0],0))
+		if ( !mgwfs_readFile(sb,child_dentry->d_name.name,dirContents,parentInode->fsHeader.size,parentInode->fsHeader.pointers[0],0))
 		{
 			kfree(dirContents);
 			printk(KERN_ERR "mgwfs_lookup(): Failed to read directory contents of %s.\n",
@@ -398,7 +431,7 @@ struct dentry* mgwfs_lookup(struct inode *dir,
 		parentInode->contentsPtr = dirContents;
 	}
 	dirEnt = 0;
-	while ( dirContents < dirContents+parentInode->size )
+	while ( dirContents < dirContents+parentInode->fsHeader.size )
 	{
 		int txtLen;
 		uint8_t gen;

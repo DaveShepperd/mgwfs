@@ -6,102 +6,18 @@
   This program can be distributed under the terms of the GNU GPLv2.
   See the file COPYING.
 
- Compile with:
- gcc -Wall -c -g mgwfsf.c -I/usr/local/include/fuse3
- gcc -Wall -c -g freemap.c
- gcc -g -o mgwfsf mgwfsf.o freemap.o -lfuse3 -lpthread
+ Build with enclosed Makefile
 
 */
 
-#define _LARGEFILE64_SOURCE 
-#define FUSE_USE_VERSION 31
-
-#include <fuse.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <string.h>
-#include <errno.h>
-#include <stddef.h>
-#include <linux/magic.h>
-#include <sys/vfs.h>
-//#include <getopt.h>
-
-typedef uint32_t sector_t;
 #include "mgwfsf.h"
 
-#ifndef S_IFREG
-#define S_IFREG 0100000
-#endif
-#ifndef S_IFDIR
-#define S_IFDIR 0040000
-#endif
-
-typedef struct part
-{
-    uint8_t status;
-    uint8_t st_head;
-    uint16_t st_sectcyl;
-    uint8_t type;
-    uint8_t en_head;
-    uint16_t en_sectcyl;
-    uint32_t abs_sect;
-    uint32_t num_sects;
-} Partition;
-
-typedef struct
-{
-    uint8_t jmp[3];          /* 0x000 x86 jump */
-    uint8_t oem_name[8];     /* 0x003 OEM name */
-    uint8_t bps[2];          /* 0x00B bytes per sector */
-    uint8_t sects_clust;     /* 0x00D sectors per cluster */
-    uint16_t num_resrv;      /* 0x00E number of reserved sectors */
-    uint8_t num_fats;        /* 0x010 number of FATs */
-    uint8_t num_roots[2];    /* 0x011 number of root directory entries */
-    uint8_t total_sects[2];  /* 0x013 total sectors in volume */
-    uint8_t media_desc;      /* 0x015 media descriptor */
-    uint16_t sects_fat;      /* 0x016 sectors per FAT */
-    uint16_t sects_trk;      /* 0x018 sectors per track */
-    uint16_t num_heads;      /* 0x01A number of heads */
-    uint32_t num_hidden;     /* 0x01C number of hidden sectors */
-    uint32_t total_sects_vol;/* 0x020 total sectors in volume */
-    uint8_t drive_num;       /* 0x024 drive number */
-    uint8_t reserved0;       /* 0x025 unused */
-    uint8_t boot_sig;        /* 0x026 extended boot signature */
-    uint8_t vol_id[4];       /* 0x027 volume ID */
-    uint8_t vol_label[11];   /* 0x02B volume label */
-    uint8_t reserved1[8];    /* 0x036 unused */
-    uint8_t bootstrap[384];  /* 0x03E boot code */
-    Partition parts[4];      /* 0x1BE partition table */
-    uint16_t end_sig;        /* 0x1FE end signature */
-} BootSector_t; // __attribute__ ((packed));
-
-static BootSector_t bootSect;
+BootSector_t bootSect;
 MgwfsSuper_t ourSuper;
 
-/*
- * Command line options
- */
-typedef struct
-{
-	unsigned long filler;		/* Fuse like to clobber this with a 0xffffff for some reason */
-	unsigned long allocation;
-	unsigned long copies;
-	unsigned long verbose;
-	unsigned long show_help;
-	unsigned long quit;
-	const char *image;
-	const char *logFile;
-	const char *testPath;
-} Options_t;
+Options_t options;
 
-static Options_t options;
-
-static void displayFileHeader(FILE *outp, FsysHeader *fhp, int retrievalsToo)
+void displayFileHeader(FILE *outp, FsysHeader *fhp, int retrievalsToo)
 {
 	FsysRetPtr *rp;
 	int alt,ii;
@@ -152,7 +68,7 @@ static void displayFileHeader(FILE *outp, FsysHeader *fhp, int retrievalsToo)
 	fflush(outp);
 }
 
-static void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t cksum)
+void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t cksum)
 {
 	fprintf(outp,
 		   "    id:        0x%X\n"
@@ -225,7 +141,7 @@ static void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t
 	fflush(outp);
 }
 
-static int getHomeBlock(MgwfsSuper_t *ourSuper, uint32_t *lbas, off64_t maxHb, off64_t sizeInSectors, uint32_t *ckSumP)
+int getHomeBlock(MgwfsSuper_t *ourSuper, uint32_t *lbas, off64_t maxHb, off64_t sizeInSectors, uint32_t *ckSumP)
 {
 	FsysHomeBlock *homeBlkp = &ourSuper->homeBlk;
 	FsysHomeBlock lclHomes[FSYS_MAX_ALTS], *lclHome=lclHomes;
@@ -306,7 +222,7 @@ static int getHomeBlock(MgwfsSuper_t *ourSuper, uint32_t *lbas, off64_t maxHb, o
 	return good;
 }
 
-static int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp)
+int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp)
 {
 	FsysHeader lclHdrs[FSYS_MAX_ALTS], *lclFhp=lclHdrs;
 	int fd, ii, good=0, match=0;
@@ -369,7 +285,7 @@ static int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id,
 	return 1;
 }
 
-static int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr)
+int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr)
 {
 	off64_t sector;
 	int fd, ptrIdx=0, retSize=0, blkLimit;
@@ -415,7 +331,7 @@ static int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, in
 	return retSize;
 }
 
-static void dumpIndex(uint32_t *indexBase, int bytes)
+void dumpIndex(uint32_t *indexBase, int bytes)
 {
 	int ii=0;
 	uint32_t *index = indexBase;
@@ -438,7 +354,7 @@ static void dumpIndex(uint32_t *indexBase, int bytes)
 	}
 }
 
-static void dumpFreemap(const char *title, FsysRetPtr *rpBase, int entries )
+void dumpFreemap(const char *title, FsysRetPtr *rpBase, int entries )
 {
 	FsysRetPtr *rp = rpBase;
 	int ii=0;
@@ -491,68 +407,7 @@ void dumpDir(uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, uint32_t *inde
 	}
 }
 
-#if 0
-int iterateDir(int nest, uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, uint32_t *indexSys)
-{
-	uint8_t *dir = dirBase;
-	int fd, ii=0;
-	FsysHeader hdr;
-	int ret=0;
-	
-	fd = ourSuper->fd;
-	if ( nest > 16 )
-	{
-		fprintf(stderr,"Directory nest at 16 is too deep\n");
-		return 1;
-	}
-	while ( dir < dirBase + bytes )
-	{
-		int txtLen;
-		uint32_t fid;
-		uint8_t gen;
-		
-		fid = (dir[2]<<16)|(dir[1]<<8)|dir[0];
-		if ( fid == 0 )
-			break;
-		dir += 3;
-		gen = *dir++;
-		txtLen = *dir++;
-		if ( !txtLen )
-			txtLen = 256;
-		if ( dir[0] != '.' )	/* skip all files starting with a dot */
-		{
-			if ( getFileHeader((char *)dir, ourSuper, FSYS_ID_HEADER, indexSys + fid * FSYS_MAX_ALTS, &hdr) && hdr.generation  == gen )
-			{
-				if ( hdr.type == FSYS_TYPE_DIR  )
-				{
-					uint8_t *fileBuff;
-					printf("%*s%5d: 0x%08X DIR 0x%08X/0x%08X 0x%02X %s\n", nest*4," ",ii, fid, hdr.size, hdr.clusters, txtLen, dir );
-					if ( (ourSuper->verbose&VERBOSE_HEADERS) )
-						displayFileHeader(stdout, &hdr, 1|(ourSuper->verbose&VERBOSE_RETPTRS));
-					fileBuff = (uint8_t*)malloc(hdr.clusters*512);
-					if ( fileBuff )
-					{
-						if ( readFile((char *)dir, ourSuper, fileBuff, hdr.size, hdr.pointers[0]) == hdr.size)
-						{
-							ret |= iterateDir(nest+1,fileBuff,hdr.size,ourSuper, indexSys);
-						}
-						free(fileBuff);
-					}
-				}
-				else
-					printf("%*s%5d: 0x%08X REG 0x%08X/0x%08X 0x%02X %s\n", nest*4," ",ii, fid, hdr.size, hdr.clusters,txtLen, dir );
-			}
-			else
-				printf("%*s%5d: 0x%08X REG 0x%02X %s *** FAILED to read file header\n", nest*4," ",ii, fid, txtLen, dir );
-		}
-		++ii;
-		dir += txtLen;
-	}
-	return ret;
-}
-#endif
-
-static void verifyFreemap(MgwfsSuper_t *ourSuper)
+void verifyFreemap(MgwfsSuper_t *ourSuper)
 {
 	int idx, rpIdx;
 	int verbSave = ourSuper->verbose;
@@ -641,7 +496,7 @@ static void verifyFreemap(MgwfsSuper_t *ourSuper)
 	free(ourFreeMap);
 }
 
-static int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
+int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 {
 	uint8_t *mem, *dirContents;
 	int selfIdx, ret=0, *nextPtr;
@@ -678,16 +533,6 @@ static int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 	selfIdx = inode->inode_no;
 	prevInodePtr = inode;
 	nextPtr = &inode->idxChildTop;
-#if 0
-	if ( (ourSuper->verbose&VERBOSE_UNPACK) )
-		fprintf(ourSuper->logFile,"unpackDir(): %s .=0x%04X ..=0x%04X, idxNext=0x%04X, dirSize=%4d, %*s%s\n",
-				S_ISDIR(inode->mode)?"DIR":"REG",
-				selfIdx,
-				dotDotIdx,
-				inode->idxNextInode,
-				inode->fsHeader.size,
-				nest, "", inode->fileName);
-#endif
 	while ( dirContents < dirContents+inode->fsHeader.size )
 	{
 		int txtLen;
@@ -783,7 +628,7 @@ static int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 	return 0;
 }
 
-static int tree(MgwfsSuper_t *ourSuper, int topIdx, int nest)
+int tree(MgwfsSuper_t *ourSuper, int topIdx, int nest)
 {
 	MgwfsInode_t *inode=ourSuper->inodeList+topIdx;
 	int ret, nextIdx;
@@ -809,7 +654,7 @@ static int tree(MgwfsSuper_t *ourSuper, int topIdx, int nest)
 	return 0;
 }
 
-static int getInode(MgwfsSuper_t *ourSuper, int topIdx, const char *path)
+int findInode(MgwfsSuper_t *ourSuper, int topIdx, const char *path)
 {
 	char partPath[MGWFS_FILENAME_MAXLEN+1];
 	MgwfsInode_t *inode;
@@ -817,7 +662,7 @@ static int getInode(MgwfsSuper_t *ourSuper, int topIdx, const char *path)
 	const char *cp;
 	
 	partPath[sizeof(partPath)-1] = 0;
-	if ( (ourSuper->verbose & VERBOSE_FUSE) )
+	if ( (ourSuper->verbose & VERBOSE_LOOKUP) )
 	{
 		fprintf(ourSuper->logFile,"getInode(): Looking for '%s' from top idx %d\n" ,path, topIdx);
 		fflush(ourSuper->logFile);
@@ -827,7 +672,7 @@ static int getInode(MgwfsSuper_t *ourSuper, int topIdx, const char *path)
 		++path;
 		if ( !*path )
 		{
-			if ( (ourSuper->verbose & VERBOSE_FUSE) )
+			if ( (ourSuper->verbose & VERBOSE_LOOKUP) )
 			{
 				fprintf(ourSuper->logFile,"\tgetInode(): of top dir '/' returned value of %d\n", topIdx );
 				fflush(ourSuper->logFile);
@@ -854,7 +699,7 @@ static int getInode(MgwfsSuper_t *ourSuper, int topIdx, const char *path)
 	inode = ourSuper->inodeList + topIdx;
 	do
 	{
-		if ( (ourSuper->verbose & VERBOSE_FUSE) )
+		if ( (ourSuper->verbose & VERBOSE_LOOKUP_ALL) )
 		{
 			fprintf(ourSuper->logFile,"\tgetInode(): checking name '%s' against fileName '%s' (inode %d, next=%d)\n",
 					partPath, inode->fileName, inode->inode_no, inode->idxNextInode);
@@ -874,10 +719,10 @@ static int getInode(MgwfsSuper_t *ourSuper, int topIdx, const char *path)
 		/* More stuff to look through. Though, this part has to be a directory */
 		inode = ourSuper->inodeList + ret;
 		if ( inode->idxChildTop )
-			ret = getInode(ourSuper, inode->idxChildTop, path);
+			ret = findInode(ourSuper, inode->idxChildTop, path);
 		else
 		{
-			if ( (ourSuper->verbose & VERBOSE_FUSE) )
+			if ( (ourSuper->verbose & VERBOSE_LOOKUP) )
 			{
 				fprintf(ourSuper->logFile,"\tgetInode(): More stuff to look through in '%s'. But inode %d is not a directory with anything in it.\n",
 						path, ret );
@@ -886,7 +731,7 @@ static int getInode(MgwfsSuper_t *ourSuper, int topIdx, const char *path)
 			ret = 0;
 		}
 	}
-	if ( (ourSuper->verbose & VERBOSE_FUSE) )
+	if ( (ourSuper->verbose & VERBOSE_LOOKUP) )
 	{
 		fprintf(ourSuper->logFile,"\tgetInode(): returned value of %d\n", ret );
 		fflush(ourSuper->logFile);
@@ -894,552 +739,74 @@ static int getInode(MgwfsSuper_t *ourSuper, int topIdx, const char *path)
 	return ret;
 }
 
-static void *mgwfsf_init(struct fuse_conn_info *conn,
-			struct fuse_config *cfg)
+static FuseFH_t *getNewFuseFHidx(MgwfsSuper_t *ourSuper)
 {
-	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
-	{
-		fprintf(ourSuper.logFile, "FUSE mgwfsf_init()\n");
-		fflush(ourSuper.logFile);
-	}
-//	cfg->kernel_cache = 1;
-	cfg->direct_io = 1;
-	return NULL;
-}
-
-static int mgwfsf_getattr(const char *path, struct stat *stbuf,
-			 struct fuse_file_info *fi)
-{
-	int idx;
-	MgwfsInode_t *inode;
+	FuseFH_t *fhp, *nFhp;
+	int idx, num;
 	
-	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+	if ( (fhp=ourSuper->fuseFHs) )
 	{
-		fprintf(ourSuper.logFile, "FUSE mgwfsf_getattr(path='%s',stbuf)\n", path);
-		fflush(ourSuper.logFile);
-	}
-	memset(stbuf, 0, sizeof(struct stat));
-	if ( (idx = getInode(&ourSuper, FSYS_INDEX_ROOT, path)) <= 0 )
-		return -ENOENT;
-	inode = ourSuper.inodeList + idx;
-	if ( S_ISDIR(inode->mode) )
-	{
-		stbuf->st_mode = S_IFDIR | 0555;
-		stbuf->st_nlink = 2 + inode->numInodes;
-	}
-	else
-	{
-		stbuf->st_mode = S_IFREG | 0444;
-		stbuf->st_nlink = 1;
-	}
-	stbuf->st_blksize = BYTES_PER_SECTOR;
-	stbuf->st_blocks = inode->fsHeader.clusters;
-	stbuf->st_ino = inode->inode_no;
-	stbuf->st_ctime = inode->fsHeader.ctime;
-	stbuf->st_mtime = inode->fsHeader.mtime;
-	stbuf->st_size = inode->fsHeader.size;
-	stbuf->st_gid = getgid();
-	stbuf->st_uid = getuid();
-	return 0;
-}
-
-static int mgwfsf_readdir(const char *path,
-						  void *buf,
-						  fuse_fill_dir_t filler,
-						  off_t offset,
-						  struct fuse_file_info *fi,
-						  enum fuse_readdir_flags flags)
-{
-	MgwfsInode_t *inode;
-	int idx, fRet;
-	
-	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
-	{
-		fprintf(ourSuper.logFile, "FUSE mgwfsf_readdir(path='%s',buf=%p,offset=%ld,fi,flags=0x%X)\n", path, buf, offset,flags);
-		fflush(ourSuper.logFile);
-	}
-	idx = getInode(&ourSuper,FSYS_INDEX_ROOT,path);
-	if (!idx)
-	{
-		fprintf(ourSuper.logFile, "FUSE mgwfsf_readdir() returned -ENOENT because '%s' could not be found\n", path);
-		fflush(ourSuper.logFile);
-		return -ENOENT;
-	}
-	inode = ourSuper.inodeList+idx;
-	if ( !S_ISDIR(inode->mode) )
-	{
-		fprintf(ourSuper.logFile, "FUSE mgwfsf_readdir() returned -ENOENT because '%s' (inode %d) is not a directory\n", path, idx);
-		fflush(ourSuper.logFile);
-		return -ENOENT;
-	}
-	filler(buf, ".", NULL, 0, FUSE_FILL_DIR_DEFAULTS);
-	filler(buf, "..", NULL, 0, FUSE_FILL_DIR_DEFAULTS);
-	idx = inode->idxChildTop;
-	while ( idx )
-	{
-		struct stat stbuf;
-		inode = ourSuper.inodeList+idx;
-		memset(&stbuf, 0, sizeof(struct stat));
-		if ( S_ISDIR(inode->mode) )
+		for (idx=0; idx < ourSuper->numFuseFHs; ++fhp)
 		{
-			stbuf.st_mode = S_IFDIR | 0755;
-			stbuf.st_nlink = 2 + inode->numInodes;
-		}
-		else
-		{
-			stbuf.st_mode = S_IFREG | 0444;
-			stbuf.st_nlink = 1;
-		}
-		stbuf.st_blksize = BYTES_PER_SECTOR;
-		stbuf.st_blocks = inode->fsHeader.clusters;
-		stbuf.st_ino = inode->inode_no;
-		stbuf.st_ctime = inode->fsHeader.ctime;
-		stbuf.st_mtime = inode->fsHeader.mtime;
-		stbuf.st_size = inode->fsHeader.size;
-		stbuf.st_gid = getgid();
-		stbuf.st_uid = getuid();
-		fRet = filler(buf, inode->fileName, &stbuf, 0, FUSE_FILL_DIR_DEFAULTS);
-		if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
-		{
-			fprintf(ourSuper.logFile, "FUSE mgwfsf_readdir(): Uploaded inode %d '%s'. Next=%d. fRet=%d\n", idx, inode->fileName, inode->idxNextInode, fRet );
-			fflush(ourSuper.logFile);
-		}
-		if ( fRet )
-			break;
-		idx = inode->idxNextInode;
-	}
-	return 0;
-}
-
-static int mgwfsf_open(const char *path, struct fuse_file_info *fi)
-{
-	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
-		fprintf(ourSuper.logFile, "FUSE mgwfsf_open(path='%s',fi)\n", path);
-#if 0
-	if (strcmp(path+1, options.filename) != 0)
-		return -ENOENT;
-
-	if ((fi->flags & O_ACCMODE) != O_RDONLY)
-		return -EACCES;
-
-	return 0;
-#else
-	return -ENOENT;
-#endif
-}
-
-static int mgwfsf_read(const char *path, char *buf, size_t size, off_t offset,
-		      struct fuse_file_info *fi)
-{
-	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
-	{
-		fprintf(ourSuper.logFile, "FUSE mgwfsf_read(path='%s',buf=%p,size=%ld,offset=%ld\n", path, buf,size,offset);
-		fflush(ourSuper.logFile);
-	}
-#if 0
-	size_t len;
-	(void) fi;
-	if(strcmp(path+1, options.filename) != 0)
-		return -ENOENT;
-
-	len = strlen(options.contents);
-	if (offset < len) {
-		if (offset + size > len)
-			size = len - offset;
-		memcpy(buf, options.contents + offset, size);
-	} else
-		size = 0;
-
-	return size;
-#else
-	return -ENOENT;
-#endif
-}
-
-/* Should be set to BYTES_PER_SECTOR, but it doesn't like that */
-#define BLOCK_SIZE (4096)
-
-static int mgwfsf_statfs(const char *path, struct statvfs *stp)
-{
-	FsysRetPtr *rp;
-	
-	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
-	{
-		fprintf(ourSuper.logFile, "FUSE mgwfsf_statfs('%s',%p\n", path, stp);
-		fflush(ourSuper.logFile);
-	}
-//	memset(stp,0,sizeof(statvfs));
-	stp->f_type = ANON_INODE_FS_MAGIC;
-	stp->f_bsize = BLOCK_SIZE; //BYTES_PER_SECTOR;
-	stp->f_blocks = (ourSuper.homeBlk.max_lba*BYTES_PER_SECTOR)/BLOCK_SIZE;
-	rp = ourSuper.freeMap;
-	while ( rp && rp < ourSuper.freeMap + ourSuper.freeMapEntriesAvail && rp->nblocks )
-	{
-		stp->f_bfree += rp->nblocks;
-		++rp;
-	}
-	stp->f_bavail = stp->f_blocks
-		- (1+
-		   (( ourSuper.inodeList[FSYS_INDEX_INDEX].fsHeader.size
-			 +ourSuper.inodeList[FSYS_INDEX_FREE].fsHeader.size
-			 +ourSuper.inodeList[FSYS_INDEX_ROOT].fsHeader.size
-			 )
-			+(BLOCK_SIZE-1)
-			)/BLOCK_SIZE);
-	stp->f_favail = ourSuper.numInodesAvailable;
-	stp->f_ffree = stp->f_favail - ourSuper.numInodesUsed;
-	stp->f_namemax = MGWFS_FILENAME_MAXLEN;
-	stp->f_frsize = BLOCK_SIZE; //BYTES_PER_SECTOR;
-	stp->f_flag = ST_NOSUID|ST_RDONLY; //ST_NOATIME|ST_NODIRATIME|ST_NOEXEC|;
-	return 0;
-}
-
-static void helpEm(FILE *ofp, const char *progname)
-{
-	fprintf(ofp, "Usage: %s [options] <mountpoint>\n", progname);
-	fprintf(ofp, "Filesystem specific options:\n"
-		   "--log=<path>    Specify a path to a logfile (default=stdout)\n"
-		   "--image=<path>  Specify a path to filesystem file (required)\n"
-		   "--testpath=<path> Specify a test path into filesystem file (forces a -q)\n"
-		   "--verbose=n 'n' is bit mask of verbose modes:\n"
-		   "            May be expressed with normal C syntax [i.e. prefix 0x or 0b for hex or binary]:\n"
-		   );
-	fprintf(ofp, "    0x%04X = display some small details\n", VERBOSE_MINIMUM);
-	fprintf(ofp, "    0x%04X = display home block\n", VERBOSE_HOME);
-	fprintf(ofp, "    0x%04X = display file headers\n", VERBOSE_HEADERS);
-	fprintf(ofp, "    0x%04X = display all retrieval pointers in file headers\n", VERBOSE_RETPTRS);
-	fprintf(ofp, "    0x%04X = display attempts at file reads\n", VERBOSE_READ);
-	fprintf(ofp, "    0x%04X = display contents of index.sys file\n", VERBOSE_INDEX);
-	fprintf(ofp, "    0x%04X = display freemap primitive actions\n", VERBOSE_FREE);
-	fprintf(ofp, "    0x%04X = display contents of freemap.sys file\n", VERBOSE_FREEMAP);
-	fprintf(ofp, "    0x%04X = display and verify contents of freemap.sys file\n", VERBOSE_VERIFY_FREEMAP);
-	fprintf(ofp, "    0x%04X = display contents of rootdir.sys file\n", VERBOSE_DMPROOT);
-	fprintf(ofp, "    0x%04X = display details during unpack()\n", VERBOSE_UNPACK);
-	fprintf(ofp, "    0x%04X = display directory tree\n", VERBOSE_ITERATE);
-	fprintf(ofp, "    0x%04X = display anything FUSE related\n", VERBOSE_FUSE);
-	fprintf(ofp, "    0x%04X = display FUSE function calls\n", VERBOSE_FUSE_CMD);
-	fprintf(ofp, "-q        = quit before starting fuse stuff\n");
-	fprintf(ofp, "-v        = sets verbose flag to a value of 0x001\n");
-}
-
-static const struct fuse_operations mgwfsf_oper = {
-	.init       = mgwfsf_init,
-	.getattr	= mgwfsf_getattr,
-	.readdir	= mgwfsf_readdir,
-	.open		= mgwfsf_open,
-	.read		= mgwfsf_read,
-	.statfs		= mgwfsf_statfs,
-};
-
-#define OPTION(t, p )                           \
-    { t, offsetof(Options_t, p), 1 }
-	
-static const struct fuse_opt option_spec[] =
-{
-	OPTION( "--allocation=%lu", allocation ),
-	OPTION( "--copies=%lu", copies ),
-	OPTION( "--image=%s", image ),
-	OPTION( "--testpath=%s", testPath ),
-	OPTION( "--log=%s", logFile ),
-	{ "--verbose", -1, FUSE_OPT_KEY_OPT},
-	OPTION("-v", verbose ),
-	OPTION("-h", show_help ),
-	OPTION("--help", show_help ),
-	OPTION("-q", quit ),
-	OPTION("--quit", quit ),
-	FUSE_OPT_END
-};
-
-static int procOption(void *data, const char *arg, int key, struct fuse_args *outargs)
-{
-	int ret=1;
-	static const char Verbose[] = "--verbose";
-	int sLen=sizeof(Verbose)-1;
-	
-//	printf("ProcOption('%s') checking for match\n", arg);
-	if ( !strncmp(arg,Verbose,sLen) )
-	{
-		char *endp=NULL;
-		if ( arg[sLen] == '=' )
-			++sLen;
-		options.verbose = strtoul(arg + sLen, &endp, 0);
-		if ( !endp || *endp )
-		{
-			printf("Invalid argument on %s\n", arg);
-			ret = -1;
-		}
-		ret = 0;
-	}
-//	printf("ProcOption('%s') returned %d\n", arg, ret);
-	return ret;   // -1 on error, 0 if to toss, 1 if to keep
-}
-
-int main(int argc, char *argv[])
-{
-	int ii;
-	int ret;
-	uint32_t homeLbas[FSYS_MAX_ALTS], ckSum;
-	MgwfsInode_t *inode;
-	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
-
-	/* Parse options */
-	if (fuse_opt_parse(&args, &options, option_spec, procOption) == -1)
-		return 1;
-
-	/* When --help is specified, first print our own file-system
-	   specific help text, then signal fuse_main to show
-	   additional help (by adding `--help` to the options again)
-	   without usage: line (by setting argv[0] to the empty
-	   string) */
-	if ( !options.show_help && (!options.image || options.image[0] == 0) )
-	{
-		fprintf(stderr, "No image name provided. Requires a --image=<path> option\n");
-		helpEm(stderr,argv[0]);
-		return 1;
-	}
-	if (options.show_help) {
-		helpEm(stderr,argv[0]);
-		assert(fuse_opt_add_arg(&args, "--help") == 0);
-		args.argv[0][0] = '\0';
-	}
-	if ( options.testPath )
-		options.quit = 1;
-	if ( options.logFile )
-	{
-		ourSuper.logFile = fopen(options.logFile,"w");
-		if ( !ourSuper.logFile )
-		{
-			fprintf(stderr,"Error opening log file '%s': %s\n", options.logFile, strerror(errno));
-			return 1;
-		}
-	}
-	else
-		ourSuper.logFile = stdout;
-	fprintf(ourSuper.logFile, "Allocation=%ld, copies=%ld, verbose=0x%lX, imageName=%s, quit=%ld, logFile='%s'\n",
-		   options.allocation, options.copies, options.verbose, options.image, options.quit, options.logFile);
-	ourSuper.verbose = options.verbose;
-	ourSuper.defaultAllocation = options.allocation;
-	ourSuper.defaultCopies = options.copies;
-	ourSuper.imageName = options.image;
-	if ( !options.show_help )
-	{
-		if ( ourSuper.verbose )
-		{
-			fprintf(ourSuper.logFile, "__WORDSIZE=%d\n", __WORDSIZE);
-			fprintf(ourSuper.logFile, "sizeof char=%ld, int=%ld, short=%ld, long=%ld, *=%ld, long long=%ld\n",
-							sizeof(char), sizeof(int), sizeof(short), sizeof(long), sizeof(char *), sizeof(long long));
-			fprintf(ourSuper.logFile, "sizeof unit8_t=%ld, uint16_t=%ld, uint32_t=%ld, uint64_t=%ld\n",
-							sizeof(uint8_t), sizeof(uint16_t), sizeof(uint32_t), sizeof(uint64_t));
-			fprintf(ourSuper.logFile, "llval=%llX, lval=%lX, int=%X\n", (long long)0x1234, (long)0x4567, (int)0x89AB);
-			fprintf(ourSuper.logFile, "FSYS_FEATURES=0x%08X, FSYS_OPTIONS=0x%08X, FSYS_MAX_ALTS=%d, FSYS_MAX_FHPTRS=%ld\n", FSYS_FEATURES, FSYS_OPTIONS, FSYS_MAX_ALTS, FSYS_MAX_FHPTRS);
-		}
-		do
-		{
-			struct stat st;
-			off64_t maxHb;
-			off64_t sizeInSectors;
-	
-			if ( FSYS_MAX_ALTS != 3 )
+			if ( !fhp->index )
 			{
-				fprintf(stderr, "FSYS_MAX_ALTS=%d. Application has to be built with it set to 3.\n", FSYS_MAX_ALTS);
-				ret = -1;
-				break;
-			}
-			ret = stat(ourSuper.imageName, &st);
-			if ( ret < 0 )
-			{
-				fprintf(stderr,"Unable to stat '%s': %s\n", ourSuper.imageName, strerror(errno));
-				break;
-			}
-			ourSuper.fd = open(ourSuper.imageName, O_RDONLY);
-			if ( ourSuper.fd < 0 )
-			{
-				fprintf(stderr, "Error opening the '%s': %s\n", ourSuper.imageName, strerror(errno));
-				ret = -1;
-				break;
-			}
-	
-			sizeInSectors = st.st_size/512;
-			maxHb = sizeInSectors > FSYS_HB_RANGE ? FSYS_HB_RANGE:sizeInSectors;
-			if ( (ourSuper.verbose&VERBOSE_HOME) )
-			{
-				fprintf(ourSuper.logFile, "File size 0x%lX, maxSector=0x%lX, maxHb=0x%lX\n", st.st_size, sizeInSectors, maxHb);
-				fprintf(ourSuper.logFile, "Attempting to read a partition table that might be present\n");
-			}
-			if ( (sizeof(bootSect) != read(ourSuper.fd,&bootSect,sizeof(bootSect))) )
-			{
-				fprintf(stderr, "Failed to read boot sector: %s\n", strerror(errno));
-				ret = -2;
-				break;
-			}
-			for (ii=0; ii < 4; ++ii)
-			{
-				if ( bootSect.parts[ii].status == 0x80 && bootSect.parts[ii].type == 0x8f )
+				fhp->index = idx + 1;
+				fhp->inode = 0;
+				fhp->instances = 0;
+				fhp->offset = 0;
+				if ( fhp->buffer )
 				{
-					ourSuper.baseSector = bootSect.parts[ii].abs_sect;
-					sizeInSectors = bootSect.parts[ii].num_sects;
-					maxHb = sizeInSectors > FSYS_HB_RANGE ? FSYS_HB_RANGE:sizeInSectors;
-					if ( (ourSuper.verbose&VERBOSE_HOME) )
-						fprintf(ourSuper.logFile, "Found an agc fsys partition in partition %d. baseSector=0x%X, numSectors=0x%lX, maxHb=0x%lX\n", ii, ourSuper.baseSector, sizeInSectors, maxHb);
-					break;
+					free(fhp->buffer);
+					fhp->buffer = NULL;
 				}
+				fhp->bufferSize = 0;
+				return fhp;
 			}
-			if ( (ourSuper.verbose&VERBOSE_HOME) && ii >= 4 )
-				fprintf(ourSuper.logFile, "No parition table found\n");
-			for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
-				homeLbas[ii] = FSYS_HB_ALG(ii, maxHb);
-			if ( !getHomeBlock(&ourSuper,homeLbas,maxHb,sizeInSectors,&ckSum) )
-			{
-				ret = -1;
-				break;
-			}
-			if ( (ourSuper.verbose&VERBOSE_HOME) )
-			{
-				fprintf(ourSuper.logFile, "Home block:\n");
-				displayHomeBlock(ourSuper.logFile,&ourSuper.homeBlk,ckSum);
-			}
-			if ( getFileHeader("index.sys", &ourSuper, FSYS_ID_INDEX, ourSuper.homeBlk.index, &ourSuper.indexSysHdr) )
-			{
-				if ( (ourSuper.verbose&VERBOSE_HEADERS) )
-					displayFileHeader(ourSuper.logFile, &ourSuper.indexSysHdr, 1 | (ourSuper.verbose & VERBOSE_RETPTRS));
-				ourSuper.numInodesAvailable = (ourSuper.indexSysHdr.clusters * 512) / (FSYS_MAX_ALTS * sizeof(uint32_t));
-				ourSuper.indexSys = (uint32_t *)calloc(ourSuper.indexSysHdr.clusters * 512, 1);
-				if ( readFile("index.sys", &ourSuper, (uint8_t*)ourSuper.indexSys, ourSuper.indexSysHdr.size, ourSuper.indexSysHdr.pointers[0]) < 0 )
-				{
-					fprintf(stderr,"Failed to read index.sys file\n");
-					ret = -1;
-					break;
-				}
-				if ( (ourSuper.verbose & VERBOSE_INDEX) )
-				{
-					if ( !(ourSuper.verbose&VERBOSE_HEADERS) )
-						displayFileHeader(ourSuper.logFile,&ourSuper.indexSysHdr,1|(ourSuper.verbose&VERBOSE_RETPTRS));
-					dumpIndex(ourSuper.indexSys, ourSuper.indexSysHdr.size);
-				}
-			}
-			else
-			{
-				ret = -1;
-				break;
-			}
-			/* First read all the fileheaders in the filesystem */
-			/* Get some memory to hold all the local inodes */
-			ourSuper.inodeList = (MgwfsInode_t *)calloc(ourSuper.numInodesAvailable, sizeof(MgwfsInode_t));
-			if ( !ourSuper.inodeList )
-			{
-				fprintf(stderr, "Sorry. Not enough memory to hold %d inodes (%ld bytes)\n", ourSuper.numInodesAvailable, sizeof(MgwfsInode_t) * ourSuper.numInodesAvailable);
-				close(ourSuper.fd);
-				return 1;
-			}
-			inode = ourSuper.inodeList;
-			memcpy(&inode->fsHeader, &ourSuper.indexSysHdr, sizeof(FsysHeader));
-			++inode;
-			ret = 0;
-			for (ii=1; ii < ourSuper.numInodesAvailable; ++ii, ++inode)
-			{
-				char tmpName[32];
-				uint32_t *lbas;
-				
-				lbas = ourSuper.indexSys + ii * FSYS_MAX_ALTS;
-				if ( !*lbas )
-					break;
-				snprintf(tmpName,sizeof(tmpName),"Inode %d", ii);
-				if ( !(*lbas & FSYS_EMPTYLBA_BIT) )
-				{
-					if ( getFileHeader(tmpName, &ourSuper, FSYS_ID_HEADER, lbas, &inode->fsHeader) )
-					{
-						inode->inode_no = ii;
-						inode->mode = (inode->fsHeader.type == FSYS_TYPE_DIR) ? S_IFDIR|0555 : S_IFREG|0444;
-						if ( (ourSuper.verbose&VERBOSE_HEADERS) )
-							displayFileHeader(ourSuper.logFile, &inode->fsHeader, 1 | (ourSuper.verbose & VERBOSE_RETPTRS));
-						else if ( (ourSuper.verbose&VERBOSE_MINIMUM) )
-							fprintf(ourSuper.logFile, "Loaded file header (inode) %4d, lbas: 0x%08X 0x%08X 0x%08X. Type=0x%X (%s)\n",
-								   ii,
-								   lbas[0], lbas[1], lbas[2],
-								   inode->fsHeader.type,
-								   S_ISDIR(inode->mode) ? "DIR":"REG");
-						++ourSuper.numInodesUsed;
-					}
-					else
-					{
-						ret = -1;
-						break;
-					}
-				}
-			}
-			if ( ret < 0 )
-				break;
-			if ( (ourSuper.verbose&VERBOSE_MINIMUM) )
-			{
-				fprintf(ourSuper.logFile, "Inode info: inode size: %ld, inodesAvailable: %d, inodesUsed: %d\n", sizeof(MgwfsInode_t), ourSuper.numInodesAvailable, ourSuper.numInodesUsed);
-			}
-			/* The first 4 files don't actually belong to any directory and have no name, so fake it */
-			inode = ourSuper.inodeList;
-			for (ii=0; ii < 4; ++ii, ++inode)
-			{
-				static const char * const Names[] = 
-				{
-					"index.sys", "freemap.sys", "rootdir.sys", "journal.sys"
-				};
-				strncpy(inode->fileName, Names[ii], sizeof(inode->fileName));
-				inode->fnLen = strlen(inode->fileName);
-				inode->idxParentInode = FSYS_INDEX_ROOT;
-				inode->inode_no = ii;
-				inode->mode = (inode->fsHeader.type == FSYS_TYPE_DIR) ? S_IFDIR | 0555 : S_IFREG | 0444;
-				/* But we need to read the contents of the freemap file */
-				if ( ii == FSYS_INDEX_FREE )
-				{
-					ourSuper.freeMap = (FsysRetPtr *)calloc(inode->fsHeader.clusters * 512, 1);
-					if ( readFile("freemap.sys", &ourSuper, (uint8_t *)ourSuper.freeMap, inode->fsHeader.size, inode->fsHeader.pointers[0]) < 0 )
-					{
-						fprintf(stderr,"Failed to read freemap.sys file\n");
-						ret = -1;
-						break;
-					}
-					if ( (ourSuper.verbose & (VERBOSE_FREEMAP | VERBOSE_VERIFY_FREEMAP)) )
-					{
-						dumpFreemap("Contents of freemap.sys before merge:", ourSuper.freeMap, (inode->fsHeader.size + sizeof(FsysRetPtr) - 1) / sizeof(FsysRetPtr));
-						if ( (ourSuper.verbose & VERBOSE_VERIFY_FREEMAP) )
-						{
-							options.quit = 1;
-							verifyFreemap(&ourSuper);
-						}
-					}
-					else if ( (ourSuper.verbose&VERBOSE_MINIMUM) )
-					{
-						fprintf(ourSuper.logFile, "Loaded %ld slots (%d bytes) of freemap\n",
-							   (inode->fsHeader.clusters * 512)/sizeof(FsysRetPtr),
-							   inode->fsHeader.clusters * 512
-							   );
-					}
-				}
-			}
-			if ( ret < 0 )
-				break;
-			inode = ourSuper.inodeList + FSYS_INDEX_ROOT; /* Point to the root directory */
-			inode->idxParentInode = FSYS_INDEX_ROOT;
-			unpackDir(&ourSuper, inode, 0); /* Create the entire filesystem directory tree */
-			if ( (ourSuper.verbose&VERBOSE_ITERATE) )
-				tree(&ourSuper, FSYS_INDEX_ROOT, 0 );
-		} while ( 0 );
+		}
 	}
-	if ( ret >= 0 && options.testPath )
+	idx = ourSuper->numFuseFHs;
+	num = idx+64;
+	fhp = (FuseFH_t *)realloc(ourSuper->fuseFHs,num*sizeof(FuseFH_t));
+	ourSuper->fuseFHs = fhp;
+	ourSuper->numFuseFHs = num;
+	nFhp = fhp + idx;
+	nFhp->index = idx+1;
+	nFhp->inode = 0;
+	nFhp->instances = 0;
+	nFhp->offset = 0;
+	if ( nFhp->buffer )
 	{
-		int idx = getInode(&ourSuper,FSYS_INDEX_ROOT,options.testPath);
-		fprintf(ourSuper.logFile,"getInode('%s') returned %d\n", options.testPath, idx);
+		free(nFhp->buffer);
+		nFhp->buffer = NULL;
 	}
-	if ( ret >= 0 && !options.quit )
-	{
-		ret = fuse_main(args.argc, args.argv, &mgwfsf_oper, NULL);
-		fuse_opt_free_args(&args);
-	}
-	if ( options.logFile )
-		fclose(ourSuper.logFile);
-	if ( ourSuper.fd >= 0 )
-		close(ourSuper.fd);
-	if ( ourSuper.indexSys )
-		free( ourSuper.indexSys );
-	if ( ourSuper.inodeList )
-		free(ourSuper.inodeList);
-	return ret;
+	nFhp->bufferSize = 0;
+	nFhp->readAmt = 0;
+	return nFhp;
 }
+
+FuseFH_t *getFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx)
+{
+	if ( !idx )
+		return getNewFuseFHidx(ourSuper);
+	return ourSuper->fuseFHs+(idx-1);
+}
+
+void freeFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx)
+{
+	if ( idx )
+	{
+		FuseFH_t *fhp = ourSuper->fuseFHs + (idx - 1);
+		fhp->index = 0;
+		fhp->inode = 0;
+		fhp->instances = 0;
+		fhp->offset = 0;
+		if ( fhp->buffer )
+		{
+			free(fhp->buffer);
+			fhp->buffer = NULL;
+		}
+		fhp->bufferSize = 0;
+		fhp->readAmt = 0;
+	}
+}
+

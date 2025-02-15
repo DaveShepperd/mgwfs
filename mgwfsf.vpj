@@ -275,6 +275,8 @@
 			Filters="*.c;*.C;*.cc;*.cpp;*.cp;*.cxx;*.c++;*.prg;*.pas;*.dpr;*.asm;*.s;*.bas;*.java;*.cs;*.sc;*.scala;*.e;*.cob;*.html;*.rc;*.tcl;*.py;*.pl;*.d;*.m;*.mm;*.go;*.groovy;*.gsh"
 			GUID="{82A11FF2-C4AF-4591-B96F-37321C8916A2}">
 			<F N="freemap.c"/>
+			<F N="fuse.c"/>
+			<F N="main.c"/>
 			<F N="mgwfsf.c"/>
 		</Folder>
 		<Folder
@@ -282,6 +284,7 @@
 			Filters="*.h;*.H;*.hh;*.hpp;*.hxx;*.h++;*.inc;*.sh;*.cpy;*.if"
 			GUID="{041C5148-DC53-4859-83E9-F8F161F44A19}">
 			<F N="agcfsys.h"/>
+			<F N="libfuse_config.h"/>
 			<F N="mgwfsf.h"/>
 		</Folder>
 		<Folder

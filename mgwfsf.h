@@ -1,6 +1,25 @@
 #ifndef __MGWFSF_H__
 #define __MGWFSF_H__
 
+#define _LARGEFILE64_SOURCE 
+#define FUSE_USE_VERSION 31
+
+#include <fuse.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <stddef.h>
+#include <linux/magic.h>
+#include <sys/vfs.h>
+#include <pthread.h>
+
+typedef uint32_t sector_t;
 #define FSYS_FEATURES (FSYS_FEATURES_CMTIME|FSYS_FEATURES_JOURNAL)
 #include "agcfsys.h"
 
@@ -34,6 +53,8 @@ enum
 	VERB_BIT_VERIFY_FREEMAP,
 	VERB_BIT_DMPROOT,
 	VERB_BIT_UNPACK,
+	VERB_BIT_LOOKUP,
+	VERB_BIT_LOOKUP_ALL,
 	VERB_BIT_ITERATE,
 	VERB_BIT_FUSE,
 	VERB_BIT_FUSE_CMD,
@@ -51,10 +72,23 @@ enum
 #define VERBOSE_VERIFY_FREEMAP	(1<<VERB_BIT_VERIFY_FREEMAP)	/* display freemap file and header */
 #define VERBOSE_DMPROOT		(1<<VERB_BIT_DMPROOT)	/* dump root directory contents and header */
 #define VERBOSE_UNPACK		(1<<VERB_BIT_UNPACK)	/* Display details during unpack() */
+#define VERBOSE_LOOKUP		(1<<VERB_BIT_LOOKUP)	/* Show instances of directory searches */
+#define VERBOSE_LOOKUP_ALL	(1<<VERB_BIT_LOOKUP_ALL)/* Show details doing directory searches */
 #define VERBOSE_ITERATE		(1<<VERB_BIT_ITERATE)	/* iterate directory tree */
 #define VERBOSE_FUSE		(1<<VERB_BIT_FUSE)		/* Show fuse stuff */
 #define VERBOSE_FUSE_CMD	(1<<VERB_BIT_FUSE_CMD)	/* Show fuse commands */
 #define VERBOSE_ANY			((1<<VERB_BIT_MAX)-1)	/* Any verbose bit */
+
+typedef struct
+{
+	int index;				/* Our index into the list */
+	uint32_t inode;			/* file ID of open file */
+	int instances;			/* number of times this file is open() */
+	uint8_t *buffer;		/* file content buffer */
+	int bufferSize;			/* size of content buffer */
+	uint32_t offset;		/* number of bytes read from this file so far */
+	int readAmt;			/* return value from readFile() */
+} FuseFH_t;
 
 typedef struct MgwfsSuper_t
 {
@@ -76,6 +110,8 @@ typedef struct MgwfsSuper_t
 	FsysRetPtr *freeMap;	/* contents of freemap.sys */
 	int freeListDirty;		/* flag indicating freelist contents is dirty */
 	FILE *logFile;			/* Defaults to stdout */
+	FuseFH_t *fuseFHs;		/* list of fuse open files */
+	int numFuseFHs;			/* number of items available in fuseFHs */
 } MgwfsSuper_t;
 
 typedef struct
@@ -91,5 +127,89 @@ typedef struct
 extern void mgwfsDumpFreeMap( MgwfsSuper_t *ourSuper, const char *title, const FsysRetPtr *list );
 extern int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSectors );
 extern int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRetPtr *retp);
+extern FuseFH_t *getFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx);
+extern void freeFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx);
+
+#ifndef S_IFREG
+#define S_IFREG 0100000
+#endif
+#ifndef S_IFDIR
+#define S_IFDIR 0040000
+#endif
+
+typedef struct part
+{
+    uint8_t status;
+    uint8_t st_head;
+    uint16_t st_sectcyl;
+    uint8_t type;
+    uint8_t en_head;
+    uint16_t en_sectcyl;
+    uint32_t abs_sect;
+    uint32_t num_sects;
+} Partition;
+
+typedef struct
+{
+    uint8_t jmp[3];          /* 0x000 x86 jump */
+    uint8_t oem_name[8];     /* 0x003 OEM name */
+    uint8_t bps[2];          /* 0x00B bytes per sector */
+    uint8_t sects_clust;     /* 0x00D sectors per cluster */
+    uint16_t num_resrv;      /* 0x00E number of reserved sectors */
+    uint8_t num_fats;        /* 0x010 number of FATs */
+    uint8_t num_roots[2];    /* 0x011 number of root directory entries */
+    uint8_t total_sects[2];  /* 0x013 total sectors in volume */
+    uint8_t media_desc;      /* 0x015 media descriptor */
+    uint16_t sects_fat;      /* 0x016 sectors per FAT */
+    uint16_t sects_trk;      /* 0x018 sectors per track */
+    uint16_t num_heads;      /* 0x01A number of heads */
+    uint32_t num_hidden;     /* 0x01C number of hidden sectors */
+    uint32_t total_sects_vol;/* 0x020 total sectors in volume */
+    uint8_t drive_num;       /* 0x024 drive number */
+    uint8_t reserved0;       /* 0x025 unused */
+    uint8_t boot_sig;        /* 0x026 extended boot signature */
+    uint8_t vol_id[4];       /* 0x027 volume ID */
+    uint8_t vol_label[11];   /* 0x02B volume label */
+    uint8_t reserved1[8];    /* 0x036 unused */
+    uint8_t bootstrap[384];  /* 0x03E boot code */
+    Partition parts[4];      /* 0x1BE partition table */
+    uint16_t end_sig;        /* 0x1FE end signature */
+} BootSector_t; // __attribute__ ((packed));
+
+extern BootSector_t bootSect;
+extern MgwfsSuper_t ourSuper;
+
+/* Funcions in mgwfsf */
+extern void displayFileHeader(FILE *outp, FsysHeader *fhp, int retrievalsToo);
+extern void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t cksum);
+extern int getHomeBlock(MgwfsSuper_t *ourSuper, uint32_t *lbas, off64_t maxHb, off64_t sizeInSectors, uint32_t *ckSumP);
+extern int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp);
+extern int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr);
+extern void dumpIndex(uint32_t *indexBase, int bytes);
+extern void dumpFreemap(const char *title, FsysRetPtr *rpBase, int entries );
+extern void dumpDir(uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, uint32_t *indexSys );
+extern void verifyFreemap(MgwfsSuper_t *ourSuper);
+extern int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest);
+extern int tree(MgwfsSuper_t *ourSuper, int topIdx, int nest);
+extern int findInode(MgwfsSuper_t *ourSuper, int topIdx, const char *path);
+
+/*
+ * Command line options
+ */
+typedef struct
+{
+	unsigned long filler;		/* Fuse like to clobber this with a 0xffffff for some reason */
+	unsigned long allocation;
+	unsigned long copies;
+	unsigned long verbose;
+	unsigned long show_help;
+	unsigned long quit;
+	const char *image;
+	const char *logFile;
+	const char *testPath;
+} Options_t;
+
+extern Options_t options;
+extern const struct fuse_operations mgwfsf_oper;
 
 #endif /*__MGWFSF_H__*/

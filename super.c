@@ -10,6 +10,9 @@ static const match_table_t tokens = {
 	{ MGWFS_MNT_OPT_VERBOSE_READ, "vread" },
 	{ MGWFS_MNT_OPT_VERBOSE_INODE, "vinode" },
 	{ MGWFS_MNT_OPT_VERBOSE_INDEX, "vindex" },
+	{ MGWFS_MNT_OPT_VERBOSE_FREE, "vfree" },
+	{ MGWFS_MNT_OPT_VERBOSE_UNPACK, "vunpack" },
+	{ MGWFS_MNT_OPT_VERBOSE_LOOKUP, "vlookup" },
 	{ 0, NULL }
 };
 
@@ -522,7 +525,7 @@ static int getOurSuper(struct super_block *sb)
 	uint32_t baseSector = 0;
 	int sizeInSectors = 0;
 	int maxHb;
-	uint32_t homeLbas[FSYS_MAX_ALTS];
+	uint32_t homeLbas[FSYS_MAX_ALTS], *indexSys;
 	MgwfsSuper_t *ourSuper;
 	uint8_t *bufPointer;
 	int flags;
@@ -633,14 +636,23 @@ static int getOurSuper(struct super_block *sb)
 		pr_err("mgwfs(): Failed to read index.sys\n");
 		return -EINVAL;
 	}
-	if ( (ourSuper->flags&MGWFS_MNT_OPT_VERBOSE_INDEX) )
+	ourSuper->indexAvailable = (ourSuper->indexSysHdr.clusters*BYTES_PER_SECTOR)/(sizeof(uint32_t)*FSYS_MAX_ALTS);
+	indexSys = ourSuper->indexSys;
+	for (ii=0; ii < ourSuper->indexAvailable; ++ii, indexSys += FSYS_MAX_ALTS)
+	{
+		if ( !*indexSys )
+			break;
+		if ( !(*indexSys&FSYS_EMPTYLBA_BIT) )
+			++ourSuper->indexUsed;
+	}
+	if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_INDEX) )
 	{
 		int ii=0;
 		char txt[256];
 		int len;
 		uint32_t bytes = ourSuper->indexSysHdr.size;
 		int entries = (bytes+sizeof(uint32_t)-1)/sizeof(uint32_t);
-		uint32_t *index = ourSuper->indexSys;
+		indexSys = ourSuper->indexSys;
 		static const char *Titles[] = 
 		{
 			"index.sys",
@@ -648,15 +660,16 @@ static int getOurSuper(struct super_block *sb)
 			"rootdir.sys",
 			"journal.sys"
 		};
+		
 		pr_info("mgwfs(): Contents of index.sys:\n");
-		while ( index < ourSuper->indexSys+entries )
+		while ( indexSys < ourSuper->indexSys+entries )
 		{
-			len = snprintf(txt,sizeof(txt),"mgwfs(): %5d: 0x%08X 0x%08X 0x%08X", ii, index[0], index[1], index[2]);
+			len = snprintf(txt,sizeof(txt),"mgwfs(): %5d: 0x%08X 0x%08X 0x%08X", ii, indexSys[0], indexSys[1], indexSys[2]);
 			if ( ii < 4 )
 				len += snprintf(txt+len,sizeof(txt)-len," (%s)", Titles[ii]);
 			pr_info("%s\n",txt);
 			++ii;
-			index += 3;
+			indexSys += 3;
 		}
 	}
 	if ( mgwfs_getFileHeader(sb, "freemap.sys", FSYS_ID_HEADER, FSYS_INDEX_FREE, ourSuper->indexSys + FSYS_INDEX_FREE*FSYS_MAX_ALTS, &ourSuper->freeMapHdr) )
@@ -708,6 +721,7 @@ static int fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_time_gran = 1;					/* mgwfs timestamps are in 1 second intervals, UTC */
 	ourSuper->defaultAllocation = 128;		/* Assume a default allocation */
 	ourSuper->defaultCopies = 1;			/* Assume a default number of copies */
+	ourSuper->hisSb = sb;					/* Cross link our super blocks */
 	ret = parse_options(sb, data); 
 	flags = ourSuper->flags;
 	if ( ret )
@@ -735,7 +749,7 @@ static int fill_super(struct super_block *sb, void *data, int silent)
 	if ( ourSuper->homeBlk.cluster != 1 )
 	{
 		printk(KERN_ERR
-			   "mgwfs seem to be formatted with mismatching cluster size: %u. s/b %u\n",
+			   "mgwfs_fill_super(): seems to be formatted with mismatching cluster size: %u. s/b %u\n",
 			   ourSuper->homeBlk.cluster, 1);
 		return -EINVAL;
 	}
@@ -743,13 +757,13 @@ static int fill_super(struct super_block *sb, void *data, int silent)
 	sb->s_op = &mgwfs_sb_ops;
 	if ( !sb_rdonly(sb) )
 	{
-		pr_warn("mgwfs_fill_sb(): Not mounted ro, setting ro flag\n");
+		pr_warn("mgwfs_fill_super(): Not mounted ro, setting ro flag\n");
 		sb->s_flags |= SB_RDONLY;
 	}
 	root_mgwfs_inode = mgwfs_get_mgwfs_inode(sb, FSYS_INDEX_ROOT, 0, "rootdir.sys");
 	if ( !root_mgwfs_inode )
 	{
-		pr_err("mgwfs(): Failed to get our inode for root dir\n");
+		pr_err("mgwfs_fill_super(): Failed to get our inode for root dir\n");
 		return -EINVAL;
 	}
 	root_inode = new_inode(sb);
@@ -757,14 +771,42 @@ static int fill_super(struct super_block *sb, void *data, int silent)
 		return -ENOMEM;
 	mgwfs_fill_inode(sb, root_inode, root_mgwfs_inode, "rootdir.sys");
 	inode_init_owner(&nop_mnt_idmap, root_inode, NULL, S_IFDIR|0555);
-
 	sb->s_root = d_make_root(root_inode);
 	if ( !sb->s_root )
 	{
 		return -ENOMEM;
 	}
-
-	return 0;
+	pr_info("mgwfs_get_super(): root parent dir=%p, inode=%p\n", sb->s_root, root_inode);
+//	root_mgwfs_inode->parentDentry = sb->s_root;
+#if 0
+	ret = mgwfs_unpackDir("mgwfs_fill_super():", sb->s_root, ourSuper, root_inode);
+	if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_UNPACK) )
+	{
+		MgwfsInode_t *ptr;
+		int dirEnt=0;
+		
+		ptr = root_mgwfs_inode->children;
+		pr_info("mgwfs_fill_super(): nextInode=%p, children=%p, numDirEntries=%d\n",
+				root_mgwfs_inode->nextInode,
+				ptr,
+				root_mgwfs_inode->numDirEntries
+				);
+		while ( ptr )
+		{
+			pr_info("mgwfs_fill_super(): %3d 0x%06X %s%s\n",
+					dirEnt,
+					ptr->inode_no,
+					ptr->fileName,
+					S_ISDIR(ptr->mode)?"/":""
+					);
+			ptr = ptr->nextInode;
+			++dirEnt;
+		}
+	}
+#else
+	ret = 0;
+#endif
+	return ret;
 }
 
 static void local_statfs(struct super_block *sb, MgwfsSuper_t *sbi, struct kstatfs *statp)
@@ -840,11 +882,11 @@ void mgwfs_kill_superblock(struct super_block *sb)
 			kfree(ourSuper->freeMap);
 		if ( ourSuper->indexSys )
 			kfree(ourSuper->indexSys);
-		pr_info("mgwfs_kill_superblock(): Unmount succesful.\n");
-		kfree(ourSuper);
-		sb->s_fs_info = NULL;
 	}
 	kill_block_super(sb);
+	if ( ourSuper )
+		kfree(ourSuper);
+	pr_info("mgwfs_kill_superblock(): Unmount succesful.\n");
 }
 
 #if 0

@@ -4,16 +4,11 @@
 #define FSYS_FEATURES (FSYS_FEATURES_CMTIME|FSYS_FEATURES_JOURNAL)
 #include "agcfsys.h"
 
-//#define BITS_IN_BYTE 8
-//#define MGWFS_MAGIC 0xFEEDF00D
-//#define MGWFS_DEFAULT_BLOCKSIZE 4096
-//#define MGWFS_DEFAULT_INODE_TABLE_SIZE 1024
-//#define MGWFS_DEFAULT_DATA_BLOCK_TABLE_SIZE 1024
 #define MGWFS_FILENAME_MAXLEN 255
 
 /* Define filesystem structures */
 
-extern struct mutex mgwfs_sb_lock;
+extern struct mutex mgwfs_mutexLock;
 
 typedef struct
 {
@@ -22,22 +17,19 @@ typedef struct
 	int buffOffset;
 } MgwfsBlock_t;
 
-typedef struct
+typedef struct MgwfsInode_t
 {
-	uint32_t inode_no;	/* offset into index.sys */
-	uint32_t mode;		/* File access mode */
-	void *contentsPtr;	/* pointer to file contents (used if type dir) */
-	char *fileName;		/* pointer to filename once found */
+	struct inode *kernelInode;		/* cross link to kernel's inode */
+	struct dentry *parentDentry;	/* Pointer to the kernel directory this file belongs to */
+	struct MgwfsInode_t *nextInode;	/* Pointer to next entry in this directory */
+	struct MgwfsInode_t *children;	/* Pointer to list of entries if this is a directory */
+	int numDirEntries;				/* number of directory entries in unpackedDir */
+	uint32_t inode_no;				/* file's ID */
+	mode_t mode;					/* file's mode */
+	int fnLen;						/* Filename length */
 	MgwfsBlock_t buffer;
 	FsysHeader fsHeader;
-#if 0
-	uint32_t size;		/* file size in bytes */
-	uint32_t clusters;	/* number of clusters allocated for this file */
-	uint32_t ctime;		/* file creation time */
-	uint32_t mtime;		/* file modification time */
-	uint8_t generation;
-	FsysRetPtr pointers[FSYS_MAX_ALTS][FSYS_MAX_FHPTRS]; /* retrieval pointers */
-#endif
+	char fileName[MGWFS_FILENAME_MAXLEN+1];	/* Filename */
 } MgwfsInode_t;
 
 #define MGWFS_MNT_OPT_ALLOCATION	1
@@ -50,7 +42,9 @@ typedef struct
 #define MGWFS_MNT_OPT_VERBOSE_INODE	128
 #define MGWFS_MNT_OPT_VERBOSE_INDEX	256
 #define MGWFS_MNT_OPT_VERBOSE_FREE	512
-#define MGWFS_MNT_OPT_ANY_VERBOSE (4|8|16|32|64|128|256)
+#define MGWFS_MNT_OPT_VERBOSE_UNPACK 1024
+#define MGWFS_MNT_OPT_VERBOSE_LOOKUP 2048
+#define MGWFS_MNT_OPT_ANY_VERBOSE (4|8|16|32|64|128|256|512|1024|2048)
 
 typedef struct MgwfsSuper_t
 {
@@ -59,6 +53,8 @@ typedef struct MgwfsSuper_t
 	uint32_t baseSector;	/* sector offset to start of our fs if in a partition */
 	FsysHeader indexSysHdr;	/* copy of the file header of index.sys */
 	uint32_t *indexSys;		/* contents of index.sys */
+	uint32_t indexUsed;		/* number of entries in index.sys used */
+	uint32_t indexAvailable;/* number of entries available in index.sys */
 	int indexFHDirty;		/* flag indicating index file header is dirty */
 	int indexSysDirty;		/* flag indicating index.sys contents is dirty */
 	FsysHeader freeMapHdr;	/* copy of file header of freemap.sys */
@@ -79,6 +75,8 @@ extern void mgwfs_putSectors(struct super_block *sb, const uint8_t *ptr, sector_
 extern int mgwfs_getFileHeader(struct super_block *sb, const char *title, uint32_t fhID, uint32_t fileID, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp);
 extern int mgwfs_allocFileHeader(struct super_block *sb, uint32_t *fid, FsysHeader *fhp);
 extern int mgwfs_readFile(struct super_block *sb, const char *title, uint8_t *dst, int bytes, FsysRetPtr *retPtr, int squawk);
+extern int mgwfs_unpackDir(const char *title, struct dentry *parentDentry, MgwfsSuper_t *ourSuper, struct inode *parentInode);
+extern int mgwfs_packDir(const char *title, MgwfsSuper_t *ourSuper, MgwfsInode_t *ourInode);
 
 typedef struct
 {

@@ -8,104 +8,102 @@ void mgwfs_destroy_inode(struct inode *inode)
 	mgwfs_inode = MGWFS_INODE(inode);
 	if ( mgwfs_inode )
 	{
-		struct super_block *sb;
-		MgwfsSuper_t *ourSuper=NULL;
-
-		sb = inode->i_sb;
-		if ( sb )
-			ourSuper = MGWFS_SB(sb);
-		if ( !ourSuper || (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_INODE) )
-			pr_info("mgwfs_destroy_inode(): Freeing private data of inode %p (%lu). ourSuper=%p, contents=%p, fileName=%p, bh=%p\n",
-					mgwfs_inode, inode->i_ino, ourSuper, mgwfs_inode->contentsPtr, mgwfs_inode->fileName, mgwfs_inode->buffer.bh);
-		if ( mgwfs_inode->contentsPtr )
-			kfree(mgwfs_inode->contentsPtr);
-		if ( mgwfs_inode->fileName )
-			kfree(mgwfs_inode->fileName);
 		if ( mgwfs_inode->buffer.bh )
+		{
 			brelse(mgwfs_inode->buffer.bh);
+			mgwfs_inode->buffer.bh = NULL;
+		}
 		kmem_cache_free(mgwfs_inode_cache, mgwfs_inode);
 	}
 }
 
-void mgwfs_fill_inode(struct super_block *sb, struct inode *inode,
-					  MgwfsInode_t *ourInode, const char *fName)
+void mgwfs_fill_inode(struct super_block *sb, struct inode *inode, MgwfsInode_t *ourInode, const char *fName)
 {
 	struct timespec64 ts;
 	MgwfsSuper_t *ourSuper = MGWFS_SB(sb);
-	int fnLen;
-	inode->i_mode = ourInode->mode;
-	inode->i_size = ourInode->fsHeader.size;
-	inode->i_sb = sb;
-	inode->i_ino = ourInode->inode_no;
-	inode->i_op = &mgwfs_inode_ops;
-	inode_set_atime_to_ts(inode, current_time(inode));
-	ts.tv_nsec = 0;
-	ts.tv_sec = ourInode->fsHeader.mtime;
-	inode_set_mtime_to_ts(inode, ts);
-	ts.tv_sec = ourInode->fsHeader.ctime;
-	inode_set_ctime_to_ts(inode, ts);
-	if ( fName && (fnLen=strlen(fName)) )
+	
+	if ( fName && (ourInode->fnLen=strlen(fName)) )
 	{
-		++fnLen;
-		if ( !(ourInode->fileName=(char *)kzalloc(fnLen,GFP_KERNEL)) )
-			printk(KERN_ERR "mgwfs(): Out of memory kzalloc'ing %d bytes for filename", fnLen);
+		strncpy(ourInode->fileName, fName, sizeof(ourInode->fileName));
+	}
+	if ( inode )
+	{
+		inode->i_mode = ourInode->mode;
+		inode->i_size = ourInode->fsHeader.size;
+		inode->i_sb = sb;
+		inode->i_ino = ourInode->inode_no;
+		inode->i_op = &mgwfs_inode_ops;
+		inode_set_atime_to_ts(inode, current_time(inode));
+		ts.tv_nsec = 0;
+		ts.tv_sec = ourInode->fsHeader.mtime;
+		inode_set_mtime_to_ts(inode, ts);
+		ts.tv_sec = ourInode->fsHeader.ctime;
+		inode_set_ctime_to_ts(inode, ts);
+		inode->i_private = ourInode;
+		ourInode->kernelInode = inode;
+		if ( S_ISDIR(inode->i_mode) )
+		{
+			inode->i_fop = &mgwfs_dir_operations;
+		}
+		else if ( S_ISREG(inode->i_mode) )
+		{
+			inode->i_fop = &mgwfs_file_operations;
+		}
 		else
-			strncpy(ourInode->fileName,fName,fnLen);
-	}
-	inode->i_private = ourInode;
-
-	if ( S_ISDIR(inode->i_mode) )
-	{
-		inode->i_fop = &mgwfs_dir_operations;
-	}
-	else if ( S_ISREG(inode->i_mode) )
-	{
-		inode->i_fop = &mgwfs_file_operations;
-	}
-	else
-	{
-		printk(KERN_WARNING
-			   "Inode %lu is neither a directory nor a regular file",
-			   inode->i_ino);
-		inode->i_fop = NULL;
+		{
+			printk(KERN_WARNING
+				   "mgwfs_fill_inode(): Inode %lu is neither a directory nor a regular file",
+				   inode->i_ino);
+			inode->i_fop = NULL;
+		}
 	}
 	if ( (ourSuper->flags&MGWFS_MNT_OPT_VERBOSE_INODE) )
 	{
-		pr_info("mgwfs_fill_inode(): inode_no=%ld, file=%s, type=%s\n",
-				inode->i_ino,
-				ourInode->fileName ? ourInode->fileName:"<undefined>",
-				S_ISDIR(inode->i_mode)?"DIR":"REG");
+		pr_info("mgwfs_fill_inode(): inode_no=%d, file=%s, type=%s\n",
+				ourInode->inode_no,
+				ourInode->fileName[0] ? ourInode->fileName:"<undefined>",
+				S_ISDIR(ourInode->mode)?"DIR":"REG");
 	}
 }
 
-int mgwfs_alloc_mgwfs_inode(struct super_block *sb, uint64_t *out_inode_no, umode_t mode)
+#if 0
+static void free_mgwfs_fileHeader(MgwfsSuper_t *ourSuper, uint32_t fid)
+{
+	uint32_t *indexSys = ourSuper->indexSys+(fid*FSYS_MAX_ALTS);
+	if ( indexSys < ourSuper->indexSys + ourSuper->indexAvailable*FSYS_MAX_ALTS )
+	{
+		for (int ii=0; ii < FSYS_MAX_ALTS; ++ii )
+			indexSys[ii] = FSYS_EMPTYLBA_BIT | 1;
+		--ourSuper->indexUsed;
+		ourSuper->indexSysDirty = 1;
+	}
+}
+
+static int alloc_mgwfs_fileHeader(struct super_block *sb, MgwfsInode_t *ourInode, umode_t mode)
 {
 	MgwfsSuper_t *ourSuper;
 	MgwfsFoundFreeMap_t freeStuff;
-	FsysHeader tmpHdr;
 	int idx, freeThem=0;
 	uint32_t fid, *indexSys, *indexSysMax;
 	struct timespec64 ts;
+	FsysHeader *tmpHdr;
 	
 	ourSuper = MGWFS_SB(sb);
 	memset(&freeStuff,0,sizeof(freeStuff));
-
-	memset(&tmpHdr, 0, sizeof(tmpHdr));
-	tmpHdr.generation = 1;
+	tmpHdr = &ourInode->fsHeader;
+	tmpHdr->generation = 1;
 	ktime_get_ts64(&ts);
-	tmpHdr.ctime = ts.tv_sec&0xFFFFFFFF;
-	tmpHdr.mtime = tmpHdr.ctime;
-	tmpHdr.id = FSYS_ID_HEADER;
-	tmpHdr.clusters = ourSuper->defaultAllocation;
-	tmpHdr.size = 0;
-	tmpHdr.type = (mode&S_IFDIR) ? FSYS_TYPE_DIR : FSYS_TYPE_FILE;
+	tmpHdr->ctime = ts.tv_sec&0xFFFFFFFF;
+	tmpHdr->mtime = tmpHdr->ctime;
+	tmpHdr->id = FSYS_ID_HEADER;
+	tmpHdr->clusters = ourSuper->defaultAllocation;
+	tmpHdr->size = 0;
+	tmpHdr->type = (mode&S_IFDIR) ? FSYS_TYPE_DIR : FSYS_TYPE_FILE;
 
-	*out_inode_no = 0;		/* Assume no new FID */
-
-	mutex_lock(&mgwfs_sb_lock);
+	mutex_lock(&mgwfs_mutexLock);
 
 	indexSys = ourSuper->indexSys;
-	indexSysMax = indexSys + (ourSuper->indexSysHdr.clusters*BYTES_PER_SECTOR)/sizeof(uint32_t);
+	indexSysMax = indexSys + ourSuper->indexAvailable;
 	while ( indexSys < indexSysMax && *indexSys && !(*indexSys&FSYS_EMPTYLBA_BIT) )
 		indexSys += FSYS_MAX_ALTS;
 	if ( indexSys >= indexSysMax )
@@ -113,10 +111,11 @@ int mgwfs_alloc_mgwfs_inode(struct super_block *sb, uint64_t *out_inode_no, umod
 		/* No entries left. This could actually be fixed by just extending the index.sys file
 		 * but for now, we just say tough mc-noogies. No more room.
 		 */
-		mutex_unlock(&mgwfs_sb_lock);
+		mutex_unlock(&mgwfs_mutexLock);
 		return -ENOSPC;
 	}
 	fid = (indexSys-ourSuper->indexSys)/FSYS_MAX_ALTS;
+	++ourSuper->indexUsed;
 	freeStuff.listAvailable = ourSuper->freeMapEntriesAvail;
 	freeStuff.listUsed = ourSuper->freeMapEntriesUsed;
 	for (idx=0; idx < FSYS_MAX_ALTS; ++idx)
@@ -135,13 +134,13 @@ int mgwfs_alloc_mgwfs_inode(struct super_block *sb, uint64_t *out_inode_no, umod
 		{
 			freeStuff.hints = &freeStuff.result;
 			freeStuff.minSector = 0;
-			if ( !mgwfsFindFree(ourSuper, &freeStuff, tmpHdr.clusters) )
+			if ( !mgwfsFindFree(ourSuper, &freeStuff, tmpHdr->clusters) )
 			{
 				freeThem = 1;
 				break;
 			}
-			tmpHdr.pointers[idx][0].nblocks = freeStuff.result.nblocks;
-			tmpHdr.pointers[idx][0].start = freeStuff.result.start;
+			tmpHdr->pointers[idx][0].nblocks = freeStuff.result.nblocks;
+			tmpHdr->pointers[idx][0].start = freeStuff.result.start;
 		}
 	}
 	if ( freeThem )
@@ -157,13 +156,14 @@ int mgwfs_alloc_mgwfs_inode(struct super_block *sb, uint64_t *out_inode_no, umod
 			mgwfsFreeSectors(ourSuper,&freeStuff,&freeStuff.result);
 			ourSuper->freeMapEntriesUsed += freeStuff.allocChange;
 			indexSys[idx] = FSYS_EMPTYLBA_BIT|1;
-			if ( tmpHdr.pointers[idx][0].nblocks )
+			--ourSuper->indexUsed;
+			if ( tmpHdr->pointers[idx][0].nblocks )
 			{
-				mgwfsFreeSectors(ourSuper,&freeStuff,&tmpHdr.pointers[idx][0]);
+				mgwfsFreeSectors(ourSuper,&freeStuff,&tmpHdr->pointers[idx][0]);
 				ourSuper->freeMapEntriesUsed += freeStuff.allocChange;
 			}
 		}
-		mutex_unlock(&mgwfs_sb_lock);
+		mutex_unlock(&mgwfs_mutexLock);
 		return -ENOSPC;		/* No room at the inn */
 	}
 	/* Write the file header */
@@ -171,10 +171,11 @@ int mgwfs_alloc_mgwfs_inode(struct super_block *sb, uint64_t *out_inode_no, umod
 	{
 		mgwfs_putSector(sb,(uint8_t*)&tmpHdr,indexSys[idx]);
 	}
-	mutex_unlock(&mgwfs_sb_lock);
-	*out_inode_no = fid;				/* Return the file id of the new entry */
+	ourInode->inode_no = fid;               /* Return the file id of the new entry */
+	mutex_unlock(&mgwfs_mutexLock);
 	return 0;
 }
+#endif
 
 MgwfsInode_t* mgwfs_get_mgwfs_inode(struct super_block *sb, uint32_t inode_no, int generation, const char *fileName )
 {
@@ -182,8 +183,7 @@ MgwfsInode_t* mgwfs_get_mgwfs_inode(struct super_block *sb, uint32_t inode_no, i
 	MgwfsInode_t *ourInode=NULL;
 	FsysHeader *hdr;
 	
-	ourInode = (MgwfsInode_t *)kmem_cache_alloc(mgwfs_inode_cache, GFP_KERNEL);
-	memset(ourInode,0,sizeof(MgwfsInode_t));
+	ourInode = (MgwfsInode_t *)kmem_cache_zalloc(mgwfs_inode_cache, GFP_KERNEL);
 	hdr = &ourInode->fsHeader;
 	if ( mgwfs_getFileHeader(sb, fileName, FSYS_ID_HEADER, inode_no, ourSuper->indexSys + inode_no * FSYS_MAX_ALTS, hdr) )
 	{
@@ -228,12 +228,12 @@ void mgwfs_save_mgwfs_inode(struct super_block *sb, MgwfsInode_t *inode)
 }
 
 #if 0
-int mgwfs_add_dir_record(struct super_block *sb, struct inode *dir,
-						 struct dentry *dentry, struct inode *inode)
+static int add_dir_record(struct super_block *sb, struct inode *dir, struct dentry *dentry, struct inode *inode)
 {
+#if 0
 	struct buffer_head *bh;
-	struct mgwfs_inode *parent_mgwfs_inode;
-	struct mgwfs_dir_record *dir_record;
+	MgwfsInode_t *parent_mgwfs_inode;
+	MgwfsDir_t *dir_record;
 
 	parent_mgwfs_inode = MGWFS_INODE(dir);
 	if ( unlikely(parent_mgwfs_inode->dir_children_count
@@ -256,10 +256,14 @@ int mgwfs_add_dir_record(struct super_block *sb, struct inode *dir,
 
 	parent_mgwfs_inode->dir_children_count += 1;
 	mgwfs_save_mgwfs_inode(sb, parent_mgwfs_inode);
-
 	return 0;
+#else
+	BUG_ON(true);
+#endif
 }
+#endif
 
+#if 0
 int mgwfs_alloc_data_block(struct super_block *sb, uint64_t *out_data_block_no)
 {
 	struct mgwfs_superblock *mgwfs_sb;
@@ -272,7 +276,7 @@ int mgwfs_alloc_data_block(struct super_block *sb, uint64_t *out_data_block_no)
 
 	mgwfs_sb = MGWFS_SB(sb);
 
-	mutex_lock(&mgwfs_sb_lock);
+	mutex_lock(&mgwfs_mutexLock);
 
 	bh = sb_bread(sb, MGWFS_DATA_BLOCK_BITMAP_BLOCK_NO);
 	BUG_ON(!bh);
@@ -299,77 +303,68 @@ int mgwfs_alloc_data_block(struct super_block *sb, uint64_t *out_data_block_no)
 	brelse(bh);
 	mgwfs_save_sb(sb);
 
-	mutex_unlock(&mgwfs_sb_lock);
+	mutex_unlock(&mgwfs_mutexLock);
 	return ret;
 }
 #endif
+
 #if 0
-int mgwfs_create_inode(struct inode *dir, struct dentry *dentry,
-					   umode_t mode)
+static int mgwfs_create_inode(struct inode *dir, struct dentry *dentry, umode_t mode)
 {
 	struct super_block *sb;
-	struct mgwfs_superblock *mgwfs_sb;
-	uint64_t inode_no;
-	struct mgwfs_inode *mgwfs_inode;
+	MgwfsSuper_t *ourSuper;
+	MgwfsInode_t *ourInode;
 	struct inode *inode;
 	int ret;
 
 	sb = dir->i_sb;
-	mgwfs_sb = MGWFS_SB(sb);
-
-	/* Create mgwfs_inode */
-	ret = mgwfs_alloc_mgwfs_inode(sb, &inode_no, mode);
-	if ( 0 != ret )
+	ourSuper = MGWFS_SB(sb);
+	if ( ourSuper->indexUsed >= ourSuper->indexAvailable )
 	{
-		printk(KERN_ERR "Unable to allocate on-disk inode. "
-			   "Is inode table full? "
-			   "Inode count: %llu\n",
-			   mgwfs_sb->inode_count);
+		printk(KERN_ERR "mgwfs_create_inode('%s'): Out of mgwfs file headers. Used=%d, available=%d\n", dentry->d_iname, ourSuper->indexUsed, ourSuper->indexAvailable);
 		return -ENOSPC;
 	}
-	mgwfs_inode = kmem_cache_alloc(mgwfs_inode_cache, GFP_KERNEL);
-	mgwfs_inode->inode_no = inode_no;
-	mgwfs_inode->mode = mode;
-	if ( S_ISDIR(mode) )
+	if ( !S_ISDIR(mode) && !S_ISREG(mode) )
 	{
-		mgwfs_inode->dir_children_count = 0;
+		printk(KERN_WARNING "mgwfs_create_inode('%s'): Trying to create inode not dir or reg. Mode: 0x%X", dentry->d_iname, mode);
+		return -EINVAL;
 	}
-	else if ( S_ISREG(mode) )
-	{
-		mgwfs_inode->file_size = 0;
-	}
-	else
-	{
-		printk(KERN_WARNING
-			   "Inode %llu is neither a directory nor a regular file",
-			   inode_no);
-	}
-
-	/* Allocate data block for the new mgwfs_inode */
-	ret = mgwfs_alloc_data_block(sb, &mgwfs_inode->data_block_no);
-	if ( 0 != ret )
-	{
-		printk(KERN_ERR "Unable to allocate on-disk data block. "
-			   "Is data block table full? "
-			   "Data block count: %llu\n",
-			   mgwfs_sb->data_block_count);
-		return -ENOSPC;
-	}
-
 	/* Create VFS inode */
 	inode = new_inode(sb);
 	if ( !inode )
 	{
+		printk(KERN_ERR "mgwfs_create_inode('%s'): Unable to allocate inode via new_inode(). Out of memory.\n", dentry->d_iname );
 		return -ENOMEM;
 	}
-	mgwfs_fill_inode(sb, inode, mgwfs_inode);
+	ourInode = kmem_cache_zalloc(mgwfs_inode_cache, GFP_KERNEL);
+	if ( !ourInode )
+	{
+		printk(KERN_ERR "mgwfs_create_inode('%s'): Unable to allocate inode from cache.\n", dentry->d_iname );
+		discard_new_inode(inode);
+		return -ENOMEM;
+	}
+	/* Create ourInode */
+	ret = alloc_mgwfs_fileHeader(sb, ourInode, mode);
+	if ( ret )
+	{
+		printk(KERN_ERR "mgwfs_create_inode('%s'): failed alloc_mgwfs_fileHeader().\n", dentry->d_iname );
+		kmem_cache_free(mgwfs_inode_cache,ourInode);
+		discard_new_inode(inode);
+		return -ENOSPC;
+	}
+	ourInode->mode = mode;
+	
+	mgwfs_fill_inode(sb, inode, ourInode, dentry->d_iname );
 
 	/* Add new inode to parent dir */
-	ret = mgwfs_add_dir_record(sb, dir, dentry, inode);
-	if ( 0 != ret )
+	ret = add_dir_record(sb, dir, dentry, inode);
+	if ( ret )
 	{
 		printk(KERN_ERR "Failed to add inode %lu to parent dir %lu\n",
 			   inode->i_ino, dir->i_ino);
+		free_mgwfs_fileHeader(ourSuper, ourInode->inode_no);
+		kmem_cache_free(mgwfs_inode_cache,ourInode);
+		discard_new_inode(inode);
 		return -ENOSPC;
 	}
 
@@ -397,51 +392,100 @@ int mgwfs_mkdir(struct mnt_idmap *idmap, struct inode *dir, struct dentry *dentr
 }
 #endif
 
-struct dentry* mgwfs_lookup(struct inode *dir,
-							struct dentry *child_dentry,
-							unsigned int flags)
+int mgwfs_unpackDir(const char *title, struct dentry *parentDentry, MgwfsSuper_t *ourSuper, struct inode *dir)
 {
-	MgwfsInode_t *parentInode = MGWFS_INODE(dir);
-	struct super_block *sb = dir->i_sb;
-	MgwfsSuper_t *ourSuper = (MgwfsSuper_t *)sb->s_fs_info;
+	MgwfsInode_t *ourInode = MGWFS_INODE(dir);
+	MgwfsInode_t *currInode, **prevInodePtr;
+	struct super_block *sb = ourSuper->hisSb;
+	struct inode *inode;
 	uint8_t *dirContents;
-	int dirEnt;
+	int err;
+	const char *parentName="<unknown>";
 	
-	if ( !(dir->i_mode&S_IFDIR) )
+	if ( !title )
+		title = "";
+	if ( parentDentry )
+		parentName = parentDentry->d_iname;
+	if ( (ourSuper->flags&MGWFS_MNT_OPT_VERBOSE_UNPACK) )
 	{
-		printk(KERN_ERR "mgwfs_lookup(): file %s (fid=0x%X) is not a directory\n", parentInode->fileName ? parentInode->fileName : "<unknown>", parentInode->inode_no);
-		return NULL;
+		pr_info("%smgwfs_unpackDir('%s'): children=%p, fsHeader.id=0x%08X, parentDentry=%p, dir=%p\n",
+				title,
+				parentName,
+				ourInode->children,
+				ourInode->fsHeader.id,
+				parentDentry,
+				dir
+				);
 	}
-	if ( !(dirContents = parentInode->contentsPtr) )
+	if ( (currInode=ourInode->children) )
 	{
-		dirContents = (uint8_t*)kzalloc(parentInode->fsHeader.size,GFP_KERNEL);
-		if ( !dirContents )
+		/* We've already unpacked the dir, but check for inode creation */
+		while ( currInode )
 		{
-			printk(KERN_ERR "mgwfs_lookup(): Out of memory allocating %d bytes for directory file %s (fid=%d).\n",
-				   parentInode->fsHeader.size, parentInode->fileName ? parentInode->fileName : "<unknown>", parentInode->inode_no);
-			return NULL;
+			if ( !currInode->kernelInode && parentDentry )
+			{
+				inode = new_inode(sb);
+				if ( !inode )
+				{
+					pr_err("%smgwfs_unpackDir('%s'): Out of memory getting new_inode()\n", title, parentName );
+					return -ENOMEM;
+				}
+				inode_init_owner(&nop_mnt_idmap, inode, dir, currInode->mode);
+				d_add(parentDentry, inode);
+				if ( (ourSuper->flags&MGWFS_MNT_OPT_VERBOSE_UNPACK) )
+				{
+					printk( KERN_INFO "%smgwfs_unpackDir('%s'): Added (after) '%s' as %s\n",
+							title,
+							parentName,
+							dirContents,
+							S_ISDIR(currInode->mode)?"DIR":"REG"
+							);
+				}
+				currInode->kernelInode = inode;
+			}
+			currInode = currInode->nextInode;
 		}
-		if ( !mgwfs_readFile(sb,child_dentry->d_name.name,dirContents,parentInode->fsHeader.size,parentInode->fsHeader.pointers[0],0))
-		{
-			kfree(dirContents);
-			printk(KERN_ERR "mgwfs_lookup(): Failed to read directory contents of %s.\n",
-				   parentInode->fileName ? parentInode->fileName : "<unknown>");
-			return NULL;
-		}
-		parentInode->contentsPtr = dirContents;
+		return 0;
 	}
-	dirEnt = 0;
-	while ( dirContents < dirContents+parentInode->fsHeader.size )
+	if ( !ourInode->fsHeader.id )
+	{
+		pr_warn("%smgwfs_unpackDir('%s'): Needed to read file header first for inode %d '%s'\n",
+				title,
+				parentName,
+				ourInode->inode_no,
+				ourInode->fileName);
+		err = mgwfs_getFileHeader(sb, ourInode->fileName, FSYS_ID_HEADER, ourInode->inode_no, ourSuper->indexSys + ourInode->inode_no * FSYS_MAX_ALTS, &ourInode->fsHeader);
+		if ( err )
+			return err;
+	}
+	dirContents = (uint8_t *)kzalloc(ourInode->fsHeader.size, GFP_KERNEL);
+	if ( !dirContents )
+	{
+		printk(KERN_ERR "%smgwfs_unpackDir('%s'): Out of memory allocating %d bytes for directory file %s (fid=%d).\n",
+			   title,
+			   parentName,
+			   ourInode->fsHeader.size,
+			   ourInode->fileName[0]?ourInode->fileName:"<unknown>",
+			   ourInode->inode_no);
+		return -ENOMEM;
+	}
+	if ( !mgwfs_readFile(sb, ourInode->fileName, dirContents, ourInode->fsHeader.size, ourInode->fsHeader.pointers[0], 0) )
+	{
+		kfree(dirContents);
+		printk(KERN_ERR "%smgwfs_unpackDir('%s'): Failed to read directory contents of %s.\n",
+			   title, parentName, ourInode->fileName[0] ? ourInode->fileName : "<unknown>");
+		return -EIO;
+	}
+	prevInodePtr = &ourInode->children;
+	while ( dirContents < dirContents+ourInode->fsHeader.size )
 	{
 		int txtLen;
 		uint8_t gen;
 		uint32_t fid;
-		MgwfsInode_t *mgwfs_child_inode;
-		struct inode *child_inode;
 		int skipDots;
-		
+
 		fid = (dirContents[2]<<16)|(dirContents[1]<<8)|dirContents[0];
-		if ( fid == 0 )
+		if ( fid == 0 || fid >= ourSuper->indexAvailable )
 			break;
 		dirContents += 3;
 		gen = *dirContents++;
@@ -451,39 +495,167 @@ struct dentry* mgwfs_lookup(struct inode *dir,
 		skipDots = 0;
 		if ( dirContents[0] == '.' )
 		{
-			if ( txtLen == 1 )
+			if ( txtLen == 2 )
 				skipDots = 1;
-			else if ( txtLen == 2 && dirContents[1] == '.' )
+			else if ( txtLen == 3 && dirContents[1] == '.' )
 				skipDots = 1;
 		}
-		if ( !skipDots && !strcmp(dirContents, child_dentry->d_name.name) )
+		if ( !skipDots )
 		{
-			if ( (ourSuper->flags&MGWFS_MNT_OPT_VERBOSE_DIR) )
-				printk( KERN_INFO "mgwfs_lookup():%5d: 0x%08X 0x%02X %3d %s\n", dirEnt, fid, gen, txtLen, dirContents);
-			mgwfs_child_inode = mgwfs_get_mgwfs_inode(sb, fid, gen, (const char *)dirContents);
-			if ( mgwfs_child_inode )
+			if ( (ourSuper->flags&MGWFS_MNT_OPT_VERBOSE_UNPACK) )
 			{
-				child_inode = new_inode(sb);
-				if ( !child_inode )
+				printk( KERN_INFO "%smgwfs_unpackDir('%s'):%5d: 0x%08X 0x%02X %3d %s\n",
+						title,
+						parentName,
+						ourInode->numDirEntries,
+						fid,
+						gen,
+						txtLen,
+						dirContents);
+			}
+			
+			if ( (currInode = mgwfs_get_mgwfs_inode(sb, fid, gen, (const char *)dirContents)) )
+			{
+				inode=NULL;
+				*prevInodePtr = currInode;
+				prevInodePtr = &currInode->nextInode;
+				if ( parentDentry )
 				{
-					printk(KERN_ERR "mgwfs_lookup(): Out of memory creating new inode for %s (fid=0x%X).\n", dirContents, fid);
-					return NULL;
+					inode = new_inode(sb);
+					if ( !inode )
+					{
+						pr_err("%smgwfs_unpackDir('%s'): Out of memory getting new_inode()\n", title, parentName );
+						return -ENOMEM;
+					}
+					inode_init_owner(&nop_mnt_idmap, inode, dir, currInode->mode);
+					d_add(parentDentry, inode);
+					if ( (ourSuper->flags&MGWFS_MNT_OPT_VERBOSE_UNPACK) )
+					{
+						printk( KERN_INFO "%smgwfs_unpackDir('%s'): Added '%s' as %s\n",
+								title,
+								parentName,
+								dirContents,
+								S_ISDIR(currInode->mode)?"DIR":"REG"
+								);
+					}
 				}
-				mgwfs_fill_inode(sb, child_inode, mgwfs_child_inode, dirContents);
-				inode_init_owner(&nop_mnt_idmap, child_inode, dir, mgwfs_child_inode->mode);
-				d_add(child_dentry, child_inode);
+				mgwfs_fill_inode(sb, inode, currInode, dirContents);
+				currInode->parentDentry = parentDentry;
 			}
 			else
 			{
-				printk(KERN_ERR "mgwfs_lookup(): Failed to read file header for %s (fid=0x%X, gen=%d).\n", dirContents, fid, gen);
+				printk(KERN_ERR "%smgwfs_unpackDir('%s'): Failed to read file header for %s (fid=0x%X, gen=%d).\n", title, parentName, dirContents, fid, gen);
 			}
+			++ourInode->numDirEntries;
+		}
+		else if ( (ourSuper->flags&MGWFS_MNT_OPT_VERBOSE_UNPACK) )
+			printk( KERN_INFO "%smgwfs_unpackDir('%s'):%5d: 0x%08X 0x%02X %3d %s (skipped)\n", title, parentName, ourInode->numDirEntries, fid, gen, txtLen, dirContents);
+		dirContents += txtLen;
+	}
+	return 0;
+}
+
+int mgwfs_packDir(const char *title, MgwfsSuper_t *ourSuper, MgwfsInode_t *ourInode)
+{
+	return -EIO;
+}
+
+struct dentry* mgwfs_lookup(struct inode *dir,
+							struct dentry *child_dentry,
+							unsigned int flags)
+{
+	MgwfsInode_t *ourDirInode;
+	struct super_block *sb;
+	MgwfsSuper_t *ourSuper;
+//	MgwfsInode_t *currInode;
+//	int dirEnt;
+	int err;
+	
+	ourDirInode = MGWFS_INODE(dir);
+	sb = dir->i_sb;
+	ourSuper = MGWFS_SB(sb);
+	if ( !(dir->i_mode & S_IFDIR) )
+	{
+		printk(KERN_ERR "mgwfs_lookup(): file %s (fid=0x%X) is not a directory\n", ourDirInode->fileName, ourDirInode->inode_no);
+		return ERR_PTR(-ENOTDIR);
+	}
+	mutex_lock(&mgwfs_mutexLock);
+	if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_LOOKUP) )
+	{
+		const char *parentName = "<unknown>";
+		const char *ourName = child_dentry->d_iname;
+		
+		if ( child_dentry->d_parent )
+			parentName = child_dentry->d_parent->d_iname;
+		printk(KERN_INFO "mgwfs_lookup(): parent: inode=%d, name '%s', next=%p\n",
+			   ourDirInode->inode_no,
+			   ourDirInode->fileName,
+			   ourDirInode->nextInode
+			   );
+		printk(KERN_INFO "mgwfs_lookup()          children=%p, numDirEntries=%d\n",
+			   ourDirInode->children,
+			   ourDirInode->numDirEntries
+			   );
+		printk(KERN_INFO "mgwfs_lookup()          child_dentry=%p, parentDentry=%p, '%s/%s/%s'\n",
+			   child_dentry,
+			   child_dentry->d_parent,
+			   parentName,
+			   ourDirInode->fileName,
+			   ourName
+			   );
+	}
+	if ( !ourDirInode->children )
+	{
+		if ( (err = mgwfs_unpackDir("mgwfs_lookup()-", child_dentry, ourSuper, dir)) )
+		{
+			mutex_unlock(&mgwfs_mutexLock);
+			return ERR_PTR(err);
+		}
+	}
+#if 0
+	currInode = ourDirInode->next;
+	dirEnt = 0;
+	for ( ;currInode; currInode = currInode->next, ++dirEnt )
+	{
+#if 0
+		if ( !strcmp(currInode->fileName, child_dentry->d_name.name) )
+		{
+			if ( (ourSuper->flags&MGWFS_MNT_OPT_VERBOSE_DIR) )
+				printk(KERN_INFO "mgwfs_lookup():%5d: 0x%08X 0x%02X(%3d) %s, kernelInode=%p\n",
+					   dirEnt, currInode->inode_no, currInode->fnLen, currInode->fnLen, currInode->fileName, currInode->kernelInode);
+			if ( !currInode->kernelInode )
+			{
+				if ( !(currInode->kernelInode = new_inode(sb)) )
+				{
+					printk(KERN_ERR "mgwfs_lookup(): Out of memory creating new inode for %s (fid=0x%X).\n", currInode->fileName, currInode->inode_no);
+					return ERR_PTR(-ENOMEM);
+				}
+				mgwfs_fill_inode(sb, currInode->kernelInode, currInode, NULL);
+				inode_init_owner(&nop_mnt_idmap, currInode->kernelInode, dir, currInode->mode);
+				d_add(child_dentry, currInode->kernelInode);
+			}
+			else
+			{
+				pr_warn("mgwfs_lookup():%5d: Already found = 0%08X 0x%02X(%3d) %s\n", dirEnt, currInode->inode_no, currInode->fnLen, currInode->fnLen, currInode->fileName);
+			}
+			mutex_unlock(&mgwfs_mutexLock);
 			return NULL;
 		}
-		++dirEnt;
-		dirContents += txtLen;
+#else
+		if ( S_ISDIR(currInode->mode) && !currInode->child )
+		{
+			if ( (err=mgwfs_unpackDir("mgwfs_lookup():", child_dentry, ourSuper, dir)) )
+			{
+				mutex_unlock(&mgwfs_mutexLock);
+				return ERR_PTR(err);
+			}
+		}
+#endif
 	}
 	if ( (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_DIR) )
 		printk(KERN_WARNING "mgwfs_lookup(): No inode found for the filename: %s\n", child_dentry->d_name.name);
+#endif
+	mutex_unlock(&mgwfs_mutexLock);
 	return NULL;
 }
 

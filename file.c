@@ -20,7 +20,7 @@ ssize_t mgwfs_read(struct file *filp, char __user *buf, size_t len,
 	sb = inode->i_sb;
 	ourInode = MGWFS_INODE(inode);
 	ourSuper = MGWFS_SB(sb); //ourInode->ourSuper;
-	if ( ourInode->fileName )
+	if ( ourInode->fileName[0] )
 		ourFileName = ourInode->fileName;
 	if ( ourSuper && (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_READ) )
 		verbose = 1;
@@ -147,7 +147,7 @@ loff_t mgwfs_llseek(struct file *filp, loff_t offset, int whence)
 		if ( !ourSuper || (ourSuper && (ourSuper->flags & MGWFS_MNT_OPT_VERBOSE_READ)) )
 			verbose = 1;
 	}
-	if ( ourInode->fileName )
+	if ( ourInode->fileName[0] )
 		ourFileName = ourInode->fileName;
 	if ( verbose )
 	{

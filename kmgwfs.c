@@ -1,6 +1,6 @@
 #include "kmgwfs.h"
 
-DEFINE_MUTEX(mgwfs_sb_lock);
+DEFINE_MUTEX(mgwfs_mutexLock);
 
 struct file_system_type mgwfs_fs_type = {
     .owner = THIS_MODULE,

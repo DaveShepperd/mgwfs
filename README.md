@@ -2,6 +2,12 @@
 mgwfs - Read/write Atari Games/Midway Games West filesystem.
 ===
 
+## DO NOT USE THIS! It doesn't work and will never work. I will delete it someday.
+
+### Use instead the [mgwfsf project](https://github.com/daveshepperd/mgwfsf.git).
+
+### The rest of this document remains present just for future reference.
+
 This was cloned from hellofs which in turn cloned from simplefs. This no longer resembles hellofs being it uses the filesystem structure of the game's disk image.
 
 But starting with hellofs was way easier to understand what had to be changed. I found starting with simplefs a bit too much to understand what needed to be done.

@@ -25,7 +25,7 @@
 				RunFromDir="%rw">
 				<Exec
 					CmdLine='gcc -c %xup -ansi %defd -O0 -g -Wall -Werror %~other -o "%bd%n%oe" %i %f'
-					OtherOptions="-I/usr/local/include/fuse3 -I. -std=gnu11"/>
+					OtherOptions="-std=gnu11"/>
 			</Target>
 			<Target
 				Name="Link"
@@ -134,9 +134,11 @@
 				Name="LinkerOutputType"
 				Value="Executable"/>
 		</List>
-		<Includes/>
+		<Includes>
+			<Include Dir="/usr/include/fuse3/"/>
+		</Includes>
 		<Libs PreObjects="0">
-			<Lib File="/usr/local/lib/fuse3/libfuse3.so"/>
+			<Lib File="-lfuse3"/>
 		</Libs>
 	</Config>
 	<Config
@@ -284,7 +286,6 @@
 			Filters="*.h;*.H;*.hh;*.hpp;*.hxx;*.h++;*.inc;*.sh;*.cpy;*.if"
 			GUID="{041C5148-DC53-4859-83E9-F8F161F44A19}">
 			<F N="agcfsys.h"/>
-			<F N="libfuse_config.h"/>
 			<F N="mgwfsf.h"/>
 		</Folder>
 		<Folder
@@ -299,9 +300,11 @@
 			Name="Other Files"
 			Filters=""
 			GUID="{10DD9058-FC2F-4327-9DBA-F6A27E0AA655}">
+			<F N="LICENSE"/>
 			<F
 				N="Makefile"
 				Type="Makefile"/>
+			<F N="README.md"/>
 		</Folder>
 	</Files>
 	<List Name="RTE">

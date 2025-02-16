@@ -58,6 +58,7 @@ static const struct fuse_opt option_spec[] =
 	OPTION("--help", show_help ),
 	OPTION("-q", quit ),
 	OPTION("--quit", quit ),
+	OPTION("--version", show_version ),
 	FUSE_OPT_END
 };
 
@@ -102,15 +103,21 @@ int main(int argc, char *argv[])
 	   additional help (by adding `--help` to the options again)
 	   without usage: line (by setting argv[0] to the empty
 	   string) */
-	if ( !options.show_help && (!options.image || options.image[0] == 0) )
+	if ( !options.show_help && !options.show_version && (!options.image || options.image[0] == 0) )
 	{
 		fprintf(stderr, "No image name provided. Requires a --image=<path> option\n");
 		helpEm(stderr,argv[0]);
 		return 1;
 	}
-	if (options.show_help) {
+	if ( options.show_help )
+	{
 		helpEm(stderr,argv[0]);
 		assert(fuse_opt_add_arg(&args, "--help") == 0);
+		args.argv[0][0] = '\0';
+	}
+	else if ( options.show_version )
+	{
+		assert(fuse_opt_add_arg(&args, "--version") == 0);
 		args.argv[0][0] = '\0';
 	}
 	if ( options.testPath )
@@ -132,7 +139,7 @@ int main(int argc, char *argv[])
 	ourSuper.defaultAllocation = options.allocation;
 	ourSuper.defaultCopies = options.copies;
 	ourSuper.imageName = options.image;
-	if ( !options.show_help )
+	if ( !options.show_help && !options.show_version )
 	{
 		if ( ourSuper.verbose )
 		{

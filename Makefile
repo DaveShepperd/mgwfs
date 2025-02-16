@@ -1,13 +1,11 @@
-FUSE3_DIR=/usr/local
-
 DBG = -g
 OPT =
 STD = -std=gnu11
-INCS = -I$(FUSE3_DIR)/include/fuse3 -I.
+INCS = -I/usr/include/fuse3 -I.
 WARN = -Wall
 CFLAGS = $(DBG) $(OPT) $(STD) $(INCS) $(WARN)
 SA_CFLAGS = -c -Wall -ansi -std=c99 -g
-LIBS = $(FUSE3_DIR)/lib/fuse3/libfuse3.so
+LIBS = -lfuse3 #$(FUSE3_DIR)/lib/fuse3/libfuse3.so
 LFLAGS = $(DBG) $(LIBS)
 SA_LFLAGS = -g
 CC = gcc

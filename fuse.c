@@ -102,8 +102,8 @@ static int mgwfsf_readdir(const char *path,
 		pthread_mutex_unlock(&ourMutex);
 		return -ENOENT;
 	}
-	filler(buf, ".", NULL, 0, FUSE_FILL_DIR_DEFAULTS);
-	filler(buf, "..", NULL, 0, FUSE_FILL_DIR_DEFAULTS);
+	filler(buf, ".", NULL, 0, FUSE_FILL_DIR_PLUS);
+	filler(buf, "..", NULL, 0, FUSE_FILL_DIR_PLUS);
 	idx = inode->idxChildTop;
 	while ( idx )
 	{
@@ -128,7 +128,7 @@ static int mgwfsf_readdir(const char *path,
 		stbuf.st_size = inode->fsHeader.size;
 		stbuf.st_gid = getgid();
 		stbuf.st_uid = getuid();
-		fRet = filler(buf, inode->fileName, &stbuf, 0, FUSE_FILL_DIR_DEFAULTS);
+		fRet = filler(buf, inode->fileName, &stbuf, 0, FUSE_FILL_DIR_PLUS);
 		if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 		{
 			fprintf(ourSuper.logFile, "FUSE mgwfsf_readdir(): Uploaded inode %d '%s'. Next=%d. fRet=%d\n", idx, inode->fileName, inode->idxNextInode, fRet );

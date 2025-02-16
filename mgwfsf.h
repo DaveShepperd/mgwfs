@@ -4,7 +4,7 @@
 #define _LARGEFILE64_SOURCE 
 #define FUSE_USE_VERSION 31
 
-#include <fuse.h>
+#include <fuse3/fuse.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/types.h>
@@ -18,6 +18,7 @@
 #include <linux/magic.h>
 #include <sys/vfs.h>
 #include <pthread.h>
+#include <assert.h>
 
 typedef uint32_t sector_t;
 #define FSYS_FEATURES (FSYS_FEATURES_CMTIME|FSYS_FEATURES_JOURNAL)
@@ -204,6 +205,7 @@ typedef struct
 	unsigned long verbose;
 	unsigned long show_help;
 	unsigned long quit;
+	unsigned long show_version;
 	const char *image;
 	const char *logFile;
 	const char *testPath;

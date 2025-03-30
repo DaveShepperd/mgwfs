@@ -1,10 +1,8 @@
 
-mgwfsf - Read/write Atari Games/Midway Games West filesystem.
+mgwfs - Read/write Atari Games/Midway Games West filesystem.
 ===
 
-This project started as the now defunct mgwfs project: a Linux device driver.
-I couldn't get that to work so backed off and wrote it as an interface to libfuse.
-Much simpler and it came together quickly and quite nicely.
+Written via an interface to libfuse.
 
 The license remains GPL because it appears that is what libfuse requires.
 
@@ -19,11 +17,11 @@ dnf install -y fuse3 fuse3-devel
 ```
 On either system:
 ```
-git clone https://github.com/daveshepperd/mgwfsf.git mgwfsf
-cd mgwfsf
+git clone https://github.com/daveshepperd/mgwfs.git mgwfs
+cd mgwfs
 make
 mkdir game
-./mgwfsf --image=<path-to-Atari-image> game
+./mgwfs --image=<path-to-Atari-image> game
 ```
 
 At this stage, it is a read-only filesystem. Writing will come later.

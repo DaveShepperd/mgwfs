@@ -10,13 +10,12 @@
 
 */
 
-#include "mgwfsf.h"
+#include "mgwfs.h"
 
 /* Not sure if a mutex is needed, but just to be safe we use one to force single threading */
 static pthread_mutex_t ourMutex = PTHREAD_MUTEX_INITIALIZER;
 
-static void *mgwfsf_init(struct fuse_conn_info *conn,
-			struct fuse_config *cfg)
+static void *mgwfsf_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
 {
 	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 	{
@@ -361,6 +360,53 @@ const struct fuse_operations mgwfsf_oper =
 	.read		= mgwfsf_read,
 	.release	= mgwfsf_release,
 	.statfs		= mgwfsf_statfs,
+#if 0
+	.access		= mgwfsf_access,	// int (*access) (const char *, int);
+	.read_buf	= mgwfsf_read_buf,	// int (*read_buf) (const char *, struct fuse_bufvec **bufp, size_t size, off_t off, struct fuse_file_info *);
+	.lseek		= mgwfsf_lseek,		// off_t (*lseek) (const char *, off_t off, int whence, struct fuse_file_info *);
+	.destroy	= mgwfsf_destroy,	// void (*destroy) (void *private_data);
+	.mknod		= mgwfsf_mknod,		// int (*mknod) (const char *, mode_t, dev_t);
+	.mkdir		= mgwfsf_mkdir,		// int (*mkdir) (const char *, mode_t);
+	.unlink		= mgwfsf_unlink,	// int (*unlink) (const char *);
+	.rmdir		= mgwfsf_rmdir,		// int (*rmdir) (const char *);
+	.rename		= mgwfsf_rename,	// int (*rename) (const char *, const char *, unsigned int flags);
+	.chmod		= mgwfsf_chmod,		// int (*chmod) (const char *, mode_t, struct fuse_file_info *fi);
+	.chown		= mgwfsf_chown,		// int (*chown) (const char *, uid_t, gid_t, struct fuse_file_info *fi);
+	.truncate	= mgwfsf_truncate,	// int (*truncate) (const char *, off_t, struct fuse_file_info *fi);
+	.utimens	= mgwfst_utimens,	// int (*utimens) (const char *, const struct timespec tv[2], struct fuse_file_info *fi);
+	.create		= mgwfsf_create,	// int (*create) (const char *, mode_t, struct fuse_file_info *);
+	.fallocate	= mgwfsf_fallocate,	// int (*fallocate) (const char *, int, off_t, off_t, struct fuse_file_info *);
+	.write		= mgwfsf_write,		// int (*write) (const char *, const char *, size_t, off_t, struct fuse_file_info *);
+	.write_buf	= mgwfsf_write_buf,	// int (*write_buf) (const char *, struct fuse_bufvec *buf, off_t off, struct fuse_file_info *);
+	.flush		= mgwfsf_flush,		// int (*flush) (const char *, struct fuse_file_info *);
+	.fsync		= mgwfsf_fsync,		// int (*fsync) (const char *, int, struct fuse_file_info *);
+#endif
+#if 0	/* No support for these functions (yet; probably never) */
+	.setxattr	= mgwfsf_setxattr,	// int (*setxattr) (const char *, const char *, const char *, size_t, int);
+	.getxattr	= mgwfsf_getxattr,	// int (*getxattr) (const char *, const char *, char *, size_t);
+	.listxattr	= mgwfsf_listxattr,	// int (*listxattr) (const char *, char *, size_t);
+	.removexattr= mgwfsf_removexattr,// int (*removexattr) (const char *, const char *);
+	int (*readlink) (const char *, char *, size_t);
+	int (*symlink) (const char *, const char *);
+	int (*link) (const char *, const char *);
+	int (*opendir) (const char *, struct fuse_file_info *);
+	int (*releasedir) (const char *, struct fuse_file_info *);
+	int (*fsyncdir) (const char *, int, struct fuse_file_info *);
+	int (*lock) (const char *, struct fuse_file_info *, int cmd,
+		     struct flock *);
+	int (*bmap) (const char *, size_t blocksize, uint64_t *idx);
+
+	int (*ioctl) (const char *, unsigned int cmd, void *arg,
+		      struct fuse_file_info *, unsigned int flags, void *data);
+	int (*poll) (const char *, struct fuse_file_info *,
+		     struct fuse_pollhandle *ph, unsigned *reventsp);
+	int (*flock) (const char *, struct fuse_file_info *, int op);
+	ssize_t (*copy_file_range) (const char *path_in,
+				    struct fuse_file_info *fi_in,
+				    off_t offset_in, const char *path_out,
+				    struct fuse_file_info *fi_out,
+				    off_t offset_out, size_t size, int flags);
+#endif
 };
 
 

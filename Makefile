@@ -11,19 +11,19 @@ SA_LFLAGS = -g
 CC = gcc
 LD = gcc
 
-OBJS = main.o mgwfsf.o freemap.o fuse.o
-HS = agcfsys.h mgwfsf.h
+OBJS = main.o mgwfs.o freemap.o fuse.o
+HS = agcfsys.h mgwfs.h
 
-default: mgwfsf
+default: mgwfs
 
-mgwfsf: $(OBJS) Makefile
+mgwfs: $(OBJS) Makefile
 	$(LD) -o $@ $(OBJS) $(LFLAGS)
 
 %.o : %.c
 	$(CC) -c $(CFLAGS) $<
 
 main.o: main.c $(HS) Makefile
-mgwfsf.o: mgwfsf.c $(HS) Makefile
+mgwfs.o: mgwfs.c $(HS) Makefile
 fuse.o: fuse.c $(HS) Makefile
 
 freemap_sa.o: freemap.c Makefile
@@ -33,4 +33,4 @@ freemap: freemap_sa.o Makefile
 	$(CC) $(SA_LFLAGS) -o $@ $<
 
 clean:
-	rm -rf Debug Release *.o mgwfsf freemap
+	rm -rf Debug Release *.o mgwfs freemap

@@ -3,16 +3,14 @@
 	Version="10.0"
 	VendorName="SlickEdit"
 	TemplateName="GNU C/C++"
-	WorkingDir="."
-	BuildSystem="vsbuild">
+	WorkingDir=".">
 	<Config
 		Name="Debug"
 		Type="gnuc"
 		DebugCallbackName="gdb"
 		Version="1"
-		OutputFile="%bdmgwfsf"
-		CompilerConfigName="Latest Version"
-		Defines="">
+		OutputFile="%bdmgwfs"
+		CompilerConfigName="Latest Version">
 		<Menu>
 			<Target
 				Name="Compile"
@@ -23,9 +21,7 @@
 				OutputExts="*.o"
 				SaveOption="SaveCurrent"
 				RunFromDir="%rw">
-				<Exec
-					CmdLine='gcc -c %xup -ansi %defd -O0 -g -Wall -Werror %~other -o "%bd%n%oe" %i %f'
-					OtherOptions="-std=gnu11"/>
+				<Exec CmdLine='gcc -c %xup  %defd -g -o "%bd%n%oe" %i "%f"'/>
 			</Target>
 			<Target
 				Name="Link"
@@ -36,27 +32,25 @@
 				Deletable="0"
 				SaveOption="SaveCurrent"
 				RunFromDir="%rw">
-				<Exec CmdLine='gcc %xup -O0 -g -Wall -Werror -o "%o" %objs'/>
+				<Exec CmdLine='gcc %xup -g -o "%o" %f %libs'/>
 			</Target>
 			<Target
 				Name="Build"
 				MenuCaption="&amp;Build"
-				Dialog="_gnuc_options_form Compile"
 				CaptureOutputWith="ProcessBuffer"
 				Deletable="0"
 				SaveOption="SaveWorkspaceFiles"
 				RunFromDir="%rw">
-				<Exec CmdLine='"%(VSLICKBIN1)vsbuild" "%w" "%r" -t build'/>
+				<Exec CmdLine="make"/>
 			</Target>
 			<Target
 				Name="Rebuild"
 				MenuCaption="&amp;Rebuild"
-				Dialog="_gnuc_options_form Compile"
 				CaptureOutputWith="ProcessBuffer"
 				Deletable="0"
 				SaveOption="SaveWorkspaceFiles"
 				RunFromDir="%rw">
-				<Exec CmdLine='"%(VSLICKBIN1)vsbuild" "%w" "%r" -t rebuild'/>
+				<Exec CmdLine=""/>
 			</Target>
 			<Target
 				Name="Debug"
@@ -134,21 +128,14 @@
 				Name="LinkerOutputType"
 				Value="Executable"/>
 		</List>
-		<Includes>
-			<Include Dir="/usr/include/fuse3/"/>
-		</Includes>
-		<Libs PreObjects="0">
-			<Lib File="-lfuse3"/>
-		</Libs>
 	</Config>
 	<Config
 		Name="Release"
 		Type="gnuc"
 		DebugCallbackName="gdb"
 		Version="1"
-		OutputFile="%bdmgwfsf"
-		CompilerConfigName="Latest Version"
-		Defines="">
+		OutputFile="%bdmgwfs"
+		CompilerConfigName="Latest Version">
 		<Menu>
 			<Target
 				Name="Compile"
@@ -159,7 +146,7 @@
 				OutputExts="*.o"
 				SaveOption="SaveCurrent"
 				RunFromDir="%rw">
-				<Exec CmdLine='gcc -c %xup -ansi %defd -o "%bd%n%oe" %i %f'/>
+				<Exec CmdLine='gcc -c %xup %defd -o "%bd%n%oe" %i "%f"'/>
 			</Target>
 			<Target
 				Name="Link"
@@ -170,27 +157,25 @@
 				Deletable="0"
 				SaveOption="SaveCurrent"
 				RunFromDir="%rw">
-				<Exec CmdLine='gcc %xup -o "%o" %objs'/>
+				<Exec CmdLine='gcc %xup -o "%o" %f %libs'/>
 			</Target>
 			<Target
 				Name="Build"
 				MenuCaption="&amp;Build"
-				Dialog="_gnuc_options_form Compile"
 				CaptureOutputWith="ProcessBuffer"
 				Deletable="0"
 				SaveOption="SaveWorkspaceFiles"
 				RunFromDir="%rw">
-				<Exec CmdLine='"%(VSLICKBIN1)vsbuild" "%w" "%r" -t build'/>
+				<Exec CmdLine="make"/>
 			</Target>
 			<Target
 				Name="Rebuild"
 				MenuCaption="&amp;Rebuild"
-				Dialog="_gnuc_options_form Compile"
 				CaptureOutputWith="ProcessBuffer"
 				Deletable="0"
 				SaveOption="SaveWorkspaceFiles"
 				RunFromDir="%rw">
-				<Exec CmdLine='"%(VSLICKBIN1)vsbuild" "%w" "%r" -t rebuild'/>
+				<Exec CmdLine=""/>
 			</Target>
 			<Target
 				Name="Debug"
@@ -268,43 +253,40 @@
 				Name="LinkerOutputType"
 				Value="Executable"/>
 		</List>
-		<Includes/>
-		<Libs PreObjects="0"/>
 	</Config>
 	<Files>
 		<Folder
 			Name="Source Files"
 			Filters="*.c;*.C;*.cc;*.cpp;*.cp;*.cxx;*.c++;*.prg;*.pas;*.dpr;*.asm;*.s;*.bas;*.java;*.cs;*.sc;*.scala;*.e;*.cob;*.html;*.rc;*.tcl;*.py;*.pl;*.d;*.m;*.mm;*.go;*.groovy;*.gsh"
-			GUID="{82A11FF2-C4AF-4591-B96F-37321C8916A2}">
+			GUID="{C697C3D4-3FED-4948-8854-664252918C38}">
 			<F N="freemap.c"/>
 			<F N="fuse.c"/>
 			<F N="main.c"/>
-			<F N="mgwfsf.c"/>
+			<F N="mgwfs.c"/>
 		</Folder>
 		<Folder
 			Name="Header Files"
 			Filters="*.h;*.H;*.hh;*.hpp;*.hxx;*.h++;*.inc;*.sh;*.cpy;*.if"
-			GUID="{041C5148-DC53-4859-83E9-F8F161F44A19}">
+			GUID="{E0B97497-F35E-4448-9094-D8BC9DF607DC}">
 			<F N="agcfsys.h"/>
-			<F N="mgwfsf.h"/>
+			<F N="mgwfs.h"/>
+			<F N="walk.sh"/>
 		</Folder>
 		<Folder
 			Name="Resource Files"
 			Filters="*.ico;*.cur;*.dlg"
-			GUID="{DE71997C-3D6A-469A-9FE4-12CC6229D300}"/>
+			GUID="{504757C2-A48C-4C9F-B55C-B9785FFFE450}"/>
 		<Folder
 			Name="Bitmaps"
 			Filters="*.bmp"
-			GUID="{614A4D2B-2173-49FA-A2A6-8D69E908D6BF}"/>
+			GUID="{53F6AD8C-B4A6-43EE-BB99-B0F38D1C2B25}"/>
 		<Folder
 			Name="Other Files"
 			Filters=""
-			GUID="{10DD9058-FC2F-4327-9DBA-F6A27E0AA655}">
-			<F N="LICENSE"/>
+			GUID="{BFFF3249-D47A-463F-A282-29F8EF4D0836}">
 			<F
 				N="Makefile"
 				Type="Makefile"/>
-			<F N="README.md"/>
 		</Folder>
 	</Files>
 	<List Name="RTE">

@@ -111,6 +111,7 @@ typedef struct MgwfsSuper_t
 	FsysRetPtr *freeMap;	/* contents of freemap.sys */
 	int freeListDirty;		/* flag indicating freelist contents is dirty */
 	FILE *logFile;			/* Defaults to stdout */
+	FILE *errFile;			/* Defaults to stderr */
 	FuseFH_t *fuseFHs;		/* list of fuse open files */
 	int numFuseFHs;			/* number of items available in fuseFHs */
 } MgwfsSuper_t;
@@ -142,12 +143,12 @@ typedef struct part
 {
     uint8_t status;
     uint8_t st_head;
-    uint16_t st_sectcyl;
+    uint8_t st_sectcyl[2];
     uint8_t type;
     uint8_t en_head;
-    uint16_t en_sectcyl;
-    uint32_t abs_sect;
-    uint32_t num_sects;
+    uint8_t en_sectcyl[2];
+    uint8_t abs_sect[4];
+    uint8_t num_sects[4];
 } Partition;
 
 typedef struct
@@ -186,9 +187,9 @@ extern void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t
 extern int getHomeBlock(MgwfsSuper_t *ourSuper, uint32_t *lbas, off64_t maxHb, off64_t sizeInSectors, uint32_t *ckSumP);
 extern int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp);
 extern int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr);
-extern void dumpIndex(uint32_t *indexBase, int bytes);
-extern void dumpFreemap(const char *title, FsysRetPtr *rpBase, int entries );
-extern void dumpDir(uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, uint32_t *indexSys );
+extern void dumpIndex(FILE *outp, uint32_t *indexBase, int bytes);
+extern void dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int entries );
+extern void dumpDir(FILE *outp, uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, uint32_t *indexSys );
 extern void verifyFreemap(MgwfsSuper_t *ourSuper);
 extern int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest);
 extern int tree(MgwfsSuper_t *ourSuper, int topIdx, int nest);

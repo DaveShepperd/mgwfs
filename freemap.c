@@ -26,7 +26,7 @@
 #include <getopt.h>
 #include <ctype.h>
 typedef uint32_t sector_t;
-#include "mgwfsf.h"
+#include "mgwfs.h"
 
 void mgwfsDumpFreeMap(MgwfsSuper_t *ourSuper, const char *title, const FsysRetPtr *list)
 {

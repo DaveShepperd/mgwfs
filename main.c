@@ -10,7 +10,7 @@
 
 */
 
-#include "mgwfsf.h"
+#include "mgwfs.h"
 
 static void helpEm(FILE *ofp, const char *progname)
 {
@@ -45,6 +45,8 @@ static void helpEm(FILE *ofp, const char *progname)
 #define OPTION(t, p )                           \
     { t, offsetof(Options_t, p), 1 }
 	
+static const char VerboseStr[] = "--verbose";
+
 static const struct fuse_opt option_spec[] =
 {
 	OPTION( "--allocation=%lu", allocation ),
@@ -52,7 +54,7 @@ static const struct fuse_opt option_spec[] =
 	OPTION( "--image=%s", image ),
 	OPTION( "--testpath=%s", testPath ),
 	OPTION( "--log=%s", logFile ),
-	{ "--verbose", -1, FUSE_OPT_KEY_OPT},
+	{ VerboseStr, -1, FUSE_OPT_KEY_OPT},
 	OPTION("-v", verbose ),
 	OPTION("-h", show_help ),
 	OPTION("--help", show_help ),
@@ -65,11 +67,11 @@ static const struct fuse_opt option_spec[] =
 static int procOption(void *data, const char *arg, int key, struct fuse_args *outargs)
 {
 	int ret=1;
-	static const char Verbose[] = "--verbose";
-	int sLen=sizeof(Verbose)-1;
+	
+	int sLen=sizeof(VerboseStr)-1;
 	
 //	printf("ProcOption('%s') checking for match\n", arg);
-	if ( !strncmp(arg,Verbose,sLen) )
+	if ( !strncmp(arg,VerboseStr,sLen) )
 	{
 		char *endp=NULL;
 		if ( arg[sLen] == '=' )
@@ -84,6 +86,13 @@ static int procOption(void *data, const char *arg, int key, struct fuse_args *ou
 	}
 //	printf("ProcOption('%s') returned %d\n", arg, ret);
 	return ret;   // -1 on error, 0 if to toss, 1 if to keep
+}
+
+static uint32_t getLe(uint8_t *ptr)
+{
+	uint32_t ans;
+	ans = (ptr[3]<<24)|(ptr[2]<<16)|(ptr[1]<<8)|ptr[0];
+	return ans;
 }
 
 int main(int argc, char *argv[])
@@ -130,9 +139,13 @@ int main(int argc, char *argv[])
 			fprintf(stderr,"Error opening log file '%s': %s\n", options.logFile, strerror(errno));
 			return 1;
 		}
+		ourSuper.errFile = ourSuper.logFile;
 	}
 	else
+	{
 		ourSuper.logFile = stdout;
+		ourSuper.errFile = stderr;
+	}
 	fprintf(ourSuper.logFile, "Allocation=%ld, copies=%ld, verbose=0x%lX, imageName=%s, quit=%ld, logFile='%s'\n",
 		   options.allocation, options.copies, options.verbose, options.image, options.quit, options.logFile);
 	ourSuper.verbose = options.verbose;
@@ -150,29 +163,32 @@ int main(int argc, char *argv[])
 							sizeof(uint8_t), sizeof(uint16_t), sizeof(uint32_t), sizeof(uint64_t));
 			fprintf(ourSuper.logFile, "llval=%llX, lval=%lX, int=%X\n", (long long)0x1234, (long)0x4567, (int)0x89AB);
 			fprintf(ourSuper.logFile, "FSYS_FEATURES=0x%08X, FSYS_OPTIONS=0x%08X, FSYS_MAX_ALTS=%d, FSYS_MAX_FHPTRS=%ld\n", FSYS_FEATURES, FSYS_OPTIONS, FSYS_MAX_ALTS, FSYS_MAX_FHPTRS);
+			fprintf(ourSuper.logFile, "Parts offset is 0x%04lX(%ld). s/b 0x1BE(446). Sizeof Part is %ld, s/b 16\n",
+				   offsetof(BootSector_t,parts),offsetof(BootSector_t,parts), sizeof(Partition));
 		}
 		do
 		{
+			int fLim;
 			struct stat st;
 			off64_t maxHb;
 			off64_t sizeInSectors;
 	
 			if ( FSYS_MAX_ALTS != 3 )
 			{
-				fprintf(stderr, "FSYS_MAX_ALTS=%d. Application has to be built with it set to 3.\n", FSYS_MAX_ALTS);
+				fprintf(ourSuper.errFile, "FSYS_MAX_ALTS=%d. Application has to be built with it set to 3.\n", FSYS_MAX_ALTS);
 				ret = -1;
 				break;
 			}
 			ret = stat(ourSuper.imageName, &st);
 			if ( ret < 0 )
 			{
-				fprintf(stderr,"Unable to stat '%s': %s\n", ourSuper.imageName, strerror(errno));
+				fprintf(ourSuper.errFile,"Unable to stat '%s': %s\n", ourSuper.imageName, strerror(errno));
 				break;
 			}
 			ourSuper.fd = open(ourSuper.imageName, O_RDONLY);
 			if ( ourSuper.fd < 0 )
 			{
-				fprintf(stderr, "Error opening the '%s': %s\n", ourSuper.imageName, strerror(errno));
+				fprintf(ourSuper.errFile, "Error opening the '%s': %s\n", ourSuper.imageName, strerror(errno));
 				ret = -1;
 				break;
 			}
@@ -186,7 +202,7 @@ int main(int argc, char *argv[])
 			}
 			if ( (sizeof(bootSect) != read(ourSuper.fd,&bootSect,sizeof(bootSect))) )
 			{
-				fprintf(stderr, "Failed to read boot sector: %s\n", strerror(errno));
+				fprintf(ourSuper.errFile, "Failed to read boot sector: %s\n", strerror(errno));
 				ret = -2;
 				break;
 			}
@@ -194,8 +210,8 @@ int main(int argc, char *argv[])
 			{
 				if ( bootSect.parts[ii].status == 0x80 && bootSect.parts[ii].type == 0x8f )
 				{
-					ourSuper.baseSector = bootSect.parts[ii].abs_sect;
-					sizeInSectors = bootSect.parts[ii].num_sects;
+					ourSuper.baseSector = getLe(bootSect.parts[ii].abs_sect);
+					sizeInSectors = getLe(bootSect.parts[ii].num_sects);
 					maxHb = sizeInSectors > FSYS_HB_RANGE ? FSYS_HB_RANGE:sizeInSectors;
 					if ( (ourSuper.verbose&VERBOSE_HOME) )
 						fprintf(ourSuper.logFile, "Found an agc fsys partition in partition %d. baseSector=0x%X, numSectors=0x%lX, maxHb=0x%lX\n", ii, ourSuper.baseSector, sizeInSectors, maxHb);
@@ -224,7 +240,7 @@ int main(int argc, char *argv[])
 				ourSuper.indexSys = (uint32_t *)calloc(ourSuper.indexSysHdr.clusters * 512, 1);
 				if ( readFile("index.sys", &ourSuper, (uint8_t*)ourSuper.indexSys, ourSuper.indexSysHdr.size, ourSuper.indexSysHdr.pointers[0]) < 0 )
 				{
-					fprintf(stderr,"Failed to read index.sys file\n");
+					fprintf(ourSuper.errFile,"Failed to read index.sys file\n");
 					ret = -1;
 					break;
 				}
@@ -232,7 +248,7 @@ int main(int argc, char *argv[])
 				{
 					if ( !(ourSuper.verbose&VERBOSE_HEADERS) )
 						displayFileHeader(ourSuper.logFile,&ourSuper.indexSysHdr,1|(ourSuper.verbose&VERBOSE_RETPTRS));
-					dumpIndex(ourSuper.indexSys, ourSuper.indexSysHdr.size);
+					dumpIndex(ourSuper.logFile, ourSuper.indexSys, ourSuper.indexSysHdr.size);
 				}
 			}
 			else
@@ -245,7 +261,7 @@ int main(int argc, char *argv[])
 			ourSuper.inodeList = (MgwfsInode_t *)calloc(ourSuper.numInodesAvailable, sizeof(MgwfsInode_t));
 			if ( !ourSuper.inodeList )
 			{
-				fprintf(stderr, "Sorry. Not enough memory to hold %d inodes (%ld bytes)\n", ourSuper.numInodesAvailable, sizeof(MgwfsInode_t) * ourSuper.numInodesAvailable);
+				fprintf(ourSuper.errFile, "Sorry. Not enough memory to hold %d inodes (%ld bytes)\n", ourSuper.numInodesAvailable, sizeof(MgwfsInode_t) * ourSuper.numInodesAvailable);
 				close(ourSuper.fd);
 				return 1;
 			}
@@ -293,7 +309,10 @@ int main(int argc, char *argv[])
 			}
 			/* The first 4 files don't actually belong to any directory and have no name, so fake it */
 			inode = ourSuper.inodeList;
-			for (ii=0; ii < 4; ++ii, ++inode)
+			fLim = 4;
+			if ( !ourSuper.homeBlk.journal[0] )
+				fLim = 3;
+			for ( ii = 0; ii < fLim; ++ii, ++inode )
 			{
 				static const char * const Names[] = 
 				{
@@ -310,13 +329,13 @@ int main(int argc, char *argv[])
 					ourSuper.freeMap = (FsysRetPtr *)calloc(inode->fsHeader.clusters * 512, 1);
 					if ( readFile("freemap.sys", &ourSuper, (uint8_t *)ourSuper.freeMap, inode->fsHeader.size, inode->fsHeader.pointers[0]) < 0 )
 					{
-						fprintf(stderr,"Failed to read freemap.sys file\n");
+						fprintf(ourSuper.errFile,"Failed to read freemap.sys file\n");
 						ret = -1;
 						break;
 					}
 					if ( (ourSuper.verbose & (VERBOSE_FREEMAP | VERBOSE_VERIFY_FREEMAP)) )
 					{
-						dumpFreemap("Contents of freemap.sys before merge:", ourSuper.freeMap, (inode->fsHeader.size + sizeof(FsysRetPtr) - 1) / sizeof(FsysRetPtr));
+						dumpFreemap(ourSuper.logFile, "Contents of freemap.sys before merge:", ourSuper.freeMap, (inode->fsHeader.size + sizeof(FsysRetPtr) - 1) / sizeof(FsysRetPtr));
 						if ( (ourSuper.verbose & VERBOSE_VERIFY_FREEMAP) )
 						{
 							options.quit = 1;

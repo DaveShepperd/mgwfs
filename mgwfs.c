@@ -10,7 +10,7 @@
 
 */
 
-#include "mgwfsf.h"
+#include "mgwfs.h"
 
 BootSector_t bootSect;
 MgwfsSuper_t ourSuper;
@@ -104,7 +104,8 @@ void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t cksum)
 		   ,homeBlkp->cluster
 		   ,homeBlkp->maxalts
 		   );
-	printf(    "    def_extend:%d\n"
+	fprintf(outp,
+			   "    def_extend:%d\n"
 			   "    ctime:     %d\n"
 			   "    mtime:     %d\n"
 			   "    atime:     %d\n"
@@ -129,7 +130,8 @@ void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t cksum)
 			   , homeBlkp->max_lba
 			   , homeBlkp->upd_flag
 			   );
-	printf("    boot1[]:   0x%08X, 0x%08X, 0x%08X\n"
+	fprintf(outp,
+		   "    boot1[]:   0x%08X, 0x%08X, 0x%08X\n"
 		   "    boot2[]:   0x%08X, 0x%08X, 0x%08X\n"
 		   "    boot3[]:   0x%08X, 0x%08X, 0x%08X\n"
 		   "    journal[]: 0x%08X, 0x%08X, 0x%08X\n"
@@ -159,16 +161,16 @@ int getHomeBlock(MgwfsSuper_t *ourSuper, uint32_t *lbas, off64_t maxHb, off64_t 
 	{
 		sector = *lbas+ourSuper->baseSector;
 		if ( (ourSuper->verbose&VERBOSE_HOME) )
-			printf("Attempting to read home block at sector 0x%lX\n", sector);
+			fprintf(ourSuper->logFile,"Attempting to read home block at sector 0x%lX\n", sector);
 		if ( lseek64(fd,sector*512,SEEK_SET) == (off64_t)-1 )
 		{
-			fprintf(stderr,"Failed to seek to sector 0x%lX: %s\n", sector, strerror(errno));
+			fprintf(ourSuper->errFile,"Failed to seek to sector 0x%lX: %s\n", sector, strerror(errno));
 			continue;
 		}
 		sts = read(fd, lclHome, sizeof(FsysHomeBlock));
 		if ( sts != sizeof(FsysHomeBlock) )
 		{
-			fprintf(stderr,"Failed to read %ld byte home block at sector 0x%lX: %s\n", sizeof(FsysHomeBlock), sector, strerror(errno));
+			fprintf(ourSuper->errFile,"Failed to read %ld byte home block at sector 0x%lX: %s\n", sizeof(FsysHomeBlock), sector, strerror(errno));
 			continue;
 		}
 		cksum = 0;
@@ -190,8 +192,8 @@ int getHomeBlock(MgwfsSuper_t *ourSuper, uint32_t *lbas, off64_t maxHb, off64_t 
 		}
 		else
 		{
-			fprintf(stderr,"Home block %d is not what is expected:\n", ii);
-			displayHomeBlock(stderr, lclHome, cksum);
+			fprintf(ourSuper->errFile,"Home block %d is not what is expected:\n", ii);
+			displayHomeBlock(ourSuper->errFile, lclHome, cksum);
 			continue;
 		}
 		if ( !ii )
@@ -203,7 +205,7 @@ int getHomeBlock(MgwfsSuper_t *ourSuper, uint32_t *lbas, off64_t maxHb, off64_t 
 			if ( !memcmp(lclHomes+0,lclHome,sizeof(FsysHomeBlock)) )
 				match |= 1<<ii;
 			else
-				fprintf(stderr,"Header %d does not match header 0\n", ii);
+				fprintf(ourSuper->errFile,"Header %d does not match header 0\n", ii);
 		}
 	}
 	if ( !good )
@@ -235,22 +237,22 @@ int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32
 	{
 		sector = lbas[ii]+ourSuper->baseSector;
 		if ( (ourSuper->verbose&VERBOSE_HEADERS) )
-			printf("Attempting to read file header for '%s' at sector 0x%lX\n", title, sector);
+			fprintf(ourSuper->logFile,"Attempting to read file header for '%s' at sector 0x%lX\n", title, sector);
 		if ( lseek64(fd,sector*512,SEEK_SET) == (off64_t)-1 )
 		{
-			fprintf(stderr,"Failed to seek to sector 0x%lX: %s\n", sector, strerror(errno));
+			fprintf(ourSuper->errFile,"Failed to seek to sector 0x%lX: %s\n", sector, strerror(errno));
 			continue;
 		}
 		sts = read(fd, lclFhp, sizeof(FsysHeader));
 		if ( sts != sizeof(FsysHeader) )
 		{
-			fprintf(stderr,"Failed to read %ld byte file header at sector 0x%lX: %s\n", sizeof(FsysHeader), sector, strerror(errno));
+			fprintf(ourSuper->errFile,"Failed to read %ld byte file header at sector 0x%lX: %s\n", sizeof(FsysHeader), sector, strerror(errno));
 			continue;
 		}
 		if ( lclFhp->id != id )
 		{
-			fprintf(stderr, "Sector at 0x%lX is not a file header:\n", sector);
-			displayFileHeader(stderr,lclFhp,0);
+			fprintf(ourSuper->errFile, "Sector at 0x%lX is not a file header:\n", sector);
+			displayFileHeader(ourSuper->errFile,lclFhp,0);
 			continue;
 		}
 		good |= 1<<ii;
@@ -263,7 +265,7 @@ int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32
 			if ( !memcmp(lclHdrs,lclFhp,sizeof(FsysHeader)) )
 				match |= 1<<ii;
 			else
-				fprintf(stderr,"Header %d does not match header 0\n", ii);
+				fprintf(ourSuper->errFile,"Header %d does not match header 0\n", ii);
 		}
 	}
 	if ( good )
@@ -296,7 +298,7 @@ int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes
 	{
 		if ( !retPtr->start || !retPtr->nblocks  )
 		{
-			fprintf(stderr,"Empty retrieval pointer at retIdx %d while reading '%s'\n", ptrIdx, title);
+			fprintf(ourSuper->errFile,"Empty retrieval pointer at retIdx %d while reading '%s'\n", ptrIdx, title);
 			return -1;
 		}
 		sector = retPtr->start;
@@ -306,12 +308,12 @@ int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes
 			blkLimit = ((blkLimit*BYTES_PER_SECTOR-limit)+BYTES_PER_SECTOR-1)/512;
 		if ( (ourSuper->verbose&VERBOSE_READ) )
 		{
-			printf("Attempting to read %ld bytes for %s. ptrIdx=%d, sector=0x%X, nblocks=%d (limited blocks=%d)\n",
+			fprintf(ourSuper->logFile,"Attempting to read %ld bytes for %s. ptrIdx=%d, sector=0x%X, nblocks=%d (limited blocks=%d)\n",
 			   limit, title, ptrIdx, retPtr->start, retPtr->nblocks, blkLimit);
 		}
 		if ( lseek64(fd,(sector+ourSuper->baseSector)*BYTES_PER_SECTOR,SEEK_SET) == (off64_t)-1 )
 		{
-			fprintf(stderr,"Failed to seek to sector 0x%lX: %s\n", sector, strerror(errno));
+			fprintf(ourSuper->errFile,"Failed to seek to sector 0x%lX: %s\n", sector, strerror(errno));
 			return -1;
 		}
 		if ( limit > retPtr->nblocks*BYTES_PER_SECTOR )
@@ -323,7 +325,7 @@ int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes
 		rdSts = read(fd, dst+retSize, limit);
 		if ( rdSts != limit )
 		{
-			fprintf(stderr,"Failed to read %ld bytes for %s. Instead got %ld: %s\n", limit, title, rdSts, strerror(errno));
+			fprintf(ourSuper->errFile,"Failed to read %ld bytes for %s. Instead got %ld: %s\n", limit, title, rdSts, strerror(errno));
 			return -1;
 		}
 		retSize += rdSts;
@@ -331,7 +333,7 @@ int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes
 	return retSize;
 }
 
-void dumpIndex(uint32_t *indexBase, int bytes)
+void dumpIndex(FILE *outp, uint32_t *indexBase, int bytes)
 {
 	int ii=0;
 	uint32_t *index = indexBase;
@@ -342,45 +344,45 @@ void dumpIndex(uint32_t *indexBase, int bytes)
 		"rootdir.sys",
 		"journal.sys"
 	};
-	printf("Contents of index.sys:\n");
+	fprintf(outp,"Contents of index.sys:\n");
 	while ( index < indexBase+(bytes+sizeof(uint32_t)-1)/sizeof(uint32_t) )
 	{
-		printf("    %5d: 0x%08X 0x%08X 0x%08X", ii, index[0], index[1], index[2]);
+		fprintf(outp, "    %5d: 0x%08X 0x%08X 0x%08X", ii, index[0], index[1], index[2]);
 		if ( ii < 4 )
-			printf(" (%s)", Titles[ii]);
-		printf("\n");
+			fprintf(outp, " (%s)", Titles[ii]);
+		fprintf(outp, "\n");
 		++ii;
 		index += 3;
 	}
 }
 
-void dumpFreemap(const char *title, FsysRetPtr *rpBase, int entries )
+void dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int entries )
 {
 	FsysRetPtr *rp = rpBase;
 	int ii=0;
 	int32_t freeSize=0;
 	
 	if ( title )
-		printf("%s\n", title);
+		fprintf(outp, "%s\n", title);
 	while ( rp < rpBase+entries )
 	{
 		freeSize += rp->nblocks;
-		printf("    %5d: 0x%08X-0x%08X (%d)\n", ii, rp->start, rp->nblocks ? rp->start+rp->nblocks-1:rp->start, rp->nblocks);
+		fprintf(outp, "    %5d: 0x%08X-0x%08X (%d)\n", ii, rp->start, rp->nblocks ? rp->start+rp->nblocks-1:rp->start, rp->nblocks);
 		if ( !rp->start || !rp->nblocks )
 			break;
 		++ii;
 		++rp;
 	}
-	printf("    Total size: %d sectors\n", freeSize);
+	fprintf(outp, "    Total size: %d sectors\n", freeSize);
 }
 
-void dumpDir(uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, uint32_t *indexSys )
+void dumpDir(FILE *outp, uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, uint32_t *indexSys )
 {
 	uint8_t *dir = dirBase;
 	int fd, ii=0;
 	FsysHeader hdr;
 	
-	printf("Contents of rootdir.sys:\n");
+	fprintf(outp, "Contents of rootdir.sys:\n");
 	fd = ourSuper->fd;
 	while ( dir < dirBase+bytes )
 	{
@@ -396,7 +398,7 @@ void dumpDir(uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, uint32_t *inde
 		txtLen = *dir++;
 		if ( !txtLen )
 			txtLen = 256;
-		printf("    %5d: 0x%08X 0x%02X %3d %s\n", ii, fid, gen, txtLen, dir );
+		fprintf(outp, "    %5d: 0x%08X 0x%02X %3d %s\n", ii, fid, gen, txtLen, dir );
 		if ( fd > 0 && indexSys )
 		{
 			if ( getFileHeader((char *)dir, ourSuper, FSYS_ID_HEADER, indexSys + fid * FSYS_MAX_ALTS, &hdr) )
@@ -470,7 +472,7 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 		}
 	}
 	ourSuper->verbose = verbSave;
-	dumpFreemap("Contents of \"used\" blocks before merge:", ourFreeMap, found.listUsed);
+	dumpFreemap(ourSuper->logFile, "Contents of \"used\" blocks before merge:", ourFreeMap, found.listUsed);
 	rp = ourFreeMap;
 	rpMax = ourFreeMap + super.freeMapEntriesAvail;
 	/* Swap freemap pointer */
@@ -483,14 +485,14 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 	super.inodeList[FSYS_INDEX_FREE].fsHeader = ourSuper->inodeList[FSYS_INDEX_FREE].fsHeader;
 	found.listAvailable = ourSuper->freeMapEntriesAvail;
 	found.listUsed = ourSuper->freeMapEntriesUsed;
-	printf("Total entries available for used list: %ld, for free list: %d\n", rpMax-rp, found.listAvailable);
+	fprintf(ourSuper->logFile, "Total entries available for used list: %ld, for free list: %d\n", rpMax-rp, found.listAvailable);
 	while ( rp < rpMax && rp->start && rp->nblocks )
 	{
 		mgwfsFreeSectors(&super,&found,rp);
 		++rp;
 	}
-	printf("Free'd a total of %ld used entries\nThe following should have just one entry from 0x01 to 0x%08X\n", rp - ourFreeMap, ourSuper->homeBlk.max_lba - 1);
-	dumpFreemap("Contents of freemap.sys after merge:", super.freeMap, found.listUsed);
+	fprintf(ourSuper->logFile, "Free'd a total of %ld used entries\nThe following should have just one entry from 0x01 to 0x%08X\n", rp - ourFreeMap, ourSuper->homeBlk.max_lba - 1);
+	dumpFreemap(ourSuper->logFile, "Contents of freemap.sys after merge:", super.freeMap, found.listUsed);
 	free(super.freeMap);
 	free(super.inodeList);
 	free(ourFreeMap);

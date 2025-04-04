@@ -1,7 +1,7 @@
 /*
-  mgwfsf: Atari/MidwayGamesWest filesystem using libfuse: Filesystem in Userspace
+  mgwfs: Atari/MidwayGamesWest filesystem using libfuse: Filesystem in Userspace
 
-  Copyright (C) 2025  Dave Shepperd <mgwfsf@dshepperd.com>
+  Copyright (C) 2025  Dave Shepperd <mgwfs@dshepperd.com>
 
   This program can be distributed under the terms of the GNU GPLv2.
   See the file COPYING.
@@ -13,7 +13,7 @@
 #include "mgwfs.h"
 
 BootSector_t bootSect;
-MgwfsSuper_t ourSuper;
+MgwfsSuper_t ourSuper = { .ourMutex=PTHREAD_MUTEX_INITIALIZER };
 
 Options_t options;
 
@@ -331,6 +331,57 @@ int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes
 		retSize += rdSts;
 	}
 	return retSize;
+}
+
+int writeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, uint8_t *dst, int bytes)
+{
+#if 0
+	off64_t sector;
+	int fd, ptrIdx=0, retSize=0, blkLimit;
+	ssize_t rdSts, limit;
+	
+	fd = ourSuper->fd;
+	while ( retSize < bytes )
+	{
+		if ( !retPtr->start || !retPtr->nblocks  )
+		{
+			fprintf(ourSuper->errFile,"Empty retrieval pointer at retIdx %d while reading '%s'\n", ptrIdx, title);
+			return -1;
+		}
+		sector = retPtr->start;
+		blkLimit = retPtr->nblocks;
+		limit = bytes - retSize;
+		if ( blkLimit*BYTES_PER_SECTOR > limit )
+			blkLimit = ((blkLimit*BYTES_PER_SECTOR-limit)+BYTES_PER_SECTOR-1)/512;
+		if ( (ourSuper->verbose&VERBOSE_READ) )
+		{
+			fprintf(ourSuper->logFile,"Attempting to read %ld bytes for %s. ptrIdx=%d, sector=0x%X, nblocks=%d (limited blocks=%d)\n",
+			   limit, title, ptrIdx, retPtr->start, retPtr->nblocks, blkLimit);
+		}
+		if ( lseek64(fd,(sector+ourSuper->baseSector)*BYTES_PER_SECTOR,SEEK_SET) == (off64_t)-1 )
+		{
+			fprintf(ourSuper->errFile,"Failed to seek to sector 0x%lX: %s\n", sector, strerror(errno));
+			return -1;
+		}
+		if ( limit > retPtr->nblocks*BYTES_PER_SECTOR )
+		{
+			limit = retPtr->nblocks*BYTES_PER_SECTOR;
+			++retPtr;
+			++ptrIdx;
+		}
+		rdSts = read(fd, dst+retSize, limit);
+		if ( rdSts != limit )
+		{
+			fprintf(ourSuper->errFile,"Failed to read %ld bytes for %s. Instead got %ld: %s\n", limit, title, rdSts, strerror(errno));
+			return -1;
+		}
+		retSize += rdSts;
+	}
+	return retSize;
+#else
+	// Write this code
+	return -EIO;
+#endif
 }
 
 void dumpIndex(FILE *outp, uint32_t *indexBase, int bytes)

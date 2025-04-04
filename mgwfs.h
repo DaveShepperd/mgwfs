@@ -1,5 +1,5 @@
-#ifndef __MGWFSF_H__
-#define __MGWFSF_H__
+#ifndef __MGWFS_H__
+#define __MGWFS_H__
 
 #define _LARGEFILE64_SOURCE 
 #define FUSE_USE_VERSION 31
@@ -19,6 +19,7 @@
 #include <sys/vfs.h>
 #include <pthread.h>
 #include <assert.h>
+#include <ctype.h>
 
 typedef uint32_t sector_t;
 #define FSYS_FEATURES (FSYS_FEATURES_CMTIME|FSYS_FEATURES_JOURNAL)
@@ -93,6 +94,8 @@ typedef struct
 
 typedef struct MgwfsSuper_t
 {
+	/* Not sure if a mutex is needed, but just to be safe we use one to force single threading */
+	pthread_mutex_t ourMutex;
 	int fd;					/* fd of image file */
 	const char *imageName;	/* path to our image */
 	uint32_t verbose;		/* verbose flags */
@@ -114,6 +117,7 @@ typedef struct MgwfsSuper_t
 	FILE *errFile;			/* Defaults to stderr */
 	FuseFH_t *fuseFHs;		/* list of fuse open files */
 	int numFuseFHs;			/* number of items available in fuseFHs */
+	FuseFH_t *fuseDirty;	/* List of fuse dirty files */
 } MgwfsSuper_t;
 
 typedef struct
@@ -121,8 +125,8 @@ typedef struct
 	FsysRetPtr result;		/* newly formed selection */
 	FsysRetPtr *hints;		/* hint of what to connect to if possible */
 	uint32_t minSector;		/* minimum sector to look for */
-	int listUsed;			/* number of entries in list used */
-	int listAvailable;		/* number of entries in list available */
+//	int listUsed;			/* number of entries in list used */
+//	int listAvailable;		/* number of entries in list available */
 	int allocChange;		/* number of entries added or deleted */
 } MgwfsFoundFreeMap_t;
 
@@ -181,12 +185,13 @@ typedef struct
 extern BootSector_t bootSect;
 extern MgwfsSuper_t ourSuper;
 
-/* Funcions in mgwfsf */
+/* Funcions in mgwfs */
 extern void displayFileHeader(FILE *outp, FsysHeader *fhp, int retrievalsToo);
 extern void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t cksum);
 extern int getHomeBlock(MgwfsSuper_t *ourSuper, uint32_t *lbas, off64_t maxHb, off64_t sizeInSectors, uint32_t *ckSumP);
 extern int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp);
 extern int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr);
+extern int writeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, uint8_t *dst, int bytes);
 extern void dumpIndex(FILE *outp, uint32_t *indexBase, int bytes);
 extern void dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int entries );
 extern void dumpDir(FILE *outp, uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, uint32_t *indexSys );
@@ -207,12 +212,13 @@ typedef struct
 	unsigned long show_help;
 	unsigned long quit;
 	unsigned long show_version;
+	unsigned long read_write;
 	const char *image;
 	const char *logFile;
 	const char *testPath;
 } Options_t;
 
 extern Options_t options;
-extern const struct fuse_operations mgwfsf_oper;
+extern const struct fuse_operations mgwfs_oper;
 
-#endif /*__MGWFSF_H__*/
+#endif /*__MGWFS_H__*/

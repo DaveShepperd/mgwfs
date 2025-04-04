@@ -1,7 +1,7 @@
 /*
-  mgwfsf: Atari/MidwayGamesWest filesystem using libfuse: Filesystem in Userspace
+  mgwfs: Atari/MidwayGamesWest filesystem using libfuse: Filesystem in Userspace
 
-  Copyright (C) 2025  Dave Shepperd <mgwfsf@dshepperd.com>
+  Copyright (C) 2025  Dave Shepperd <mgwfs@dshepperd.com>
 
   This program can be distributed under the terms of the GNU GPLv2.
   See the file COPYING.
@@ -16,8 +16,12 @@ static void helpEm(FILE *ofp, const char *progname)
 {
 	fprintf(ofp, "Usage: %s [options] <mountpoint>\n", progname);
 	fprintf(ofp, "Filesystem specific options:\n"
+		   "--allocation=n  Specify the default allocation in sectors (default=100)\n"
+		   "--copies=n      Specify the default number of copies of each file to write (default=1)\n"
 		   "--log=<path>    Specify a path to a logfile (default=stdout)\n"
 		   "--image=<path>  Specify a path to filesystem file (required)\n"
+		   "--readwrite     Specify to allow writing (default is readonly)\n"
+		   "--rw            Specify to allow writing (default is readonly)\n"
 		   "--testpath=<path> Specify a test path into filesystem file (forces a -q)\n"
 		   "--verbose=n 'n' is bit mask of verbose modes:\n"
 		   "            May be expressed with normal C syntax [i.e. prefix 0x or 0b for hex or binary]:\n"
@@ -38,8 +42,11 @@ static void helpEm(FILE *ofp, const char *progname)
 	fprintf(ofp, "    0x%04X = display directory tree\n", VERBOSE_ITERATE);
 	fprintf(ofp, "    0x%04X = display anything FUSE related\n", VERBOSE_FUSE);
 	fprintf(ofp, "    0x%04X = display FUSE function calls\n", VERBOSE_FUSE_CMD);
-	fprintf(ofp, "-q        = quit before starting fuse stuff\n");
-	fprintf(ofp, "-v        = sets verbose flag to a value of 0x001\n");
+	fprintf(ofp,
+			"-v           Sets verbose flag to a value of 0x001\n"
+			"-q or --quit Quit before starting fuse stuff (i.e. just read home blocks, don't mount)\n"
+			"-h or --help Print this message\n"
+			);
 }
 
 #define OPTION(t, p )                           \
@@ -61,6 +68,9 @@ static const struct fuse_opt option_spec[] =
 	OPTION("-q", quit ),
 	OPTION("--quit", quit ),
 	OPTION("--version", show_version ),
+	OPTION("--readwrite", read_write ),
+	OPTION("--rw", read_write ),
+	OPTION("-w", read_write ),
 	FUSE_OPT_END
 };
 
@@ -146,8 +156,8 @@ int main(int argc, char *argv[])
 		ourSuper.logFile = stdout;
 		ourSuper.errFile = stderr;
 	}
-	fprintf(ourSuper.logFile, "Allocation=%ld, copies=%ld, verbose=0x%lX, imageName=%s, quit=%ld, logFile='%s'\n",
-		   options.allocation, options.copies, options.verbose, options.image, options.quit, options.logFile);
+	fprintf(ourSuper.logFile, "Allocation=%ld, copies=%ld, verbose=0x%lX, imageName=%s, quit=%ld, readwrite=%ld, logFile='%s'\n",
+		   options.allocation, options.copies, options.verbose, options.image, options.quit, options.read_write, options.logFile);
 	ourSuper.verbose = options.verbose;
 	ourSuper.defaultAllocation = options.allocation;
 	ourSuper.defaultCopies = options.copies;
@@ -365,9 +375,10 @@ int main(int argc, char *argv[])
 		int idx = findInode(&ourSuper,FSYS_INDEX_ROOT,options.testPath);
 		fprintf(ourSuper.logFile,"getInode('%s') returned %d\n", options.testPath, idx);
 	}
+	fflush(ourSuper.logFile);
 	if ( ret >= 0 && !options.quit )
 	{
-		ret = fuse_main(args.argc, args.argv, &mgwfsf_oper, NULL);
+		ret = fuse_main(args.argc, args.argv, &mgwfs_oper, NULL);
 		fuse_opt_free_args(&args);
 	}
 	if ( options.logFile )
@@ -378,5 +389,6 @@ int main(int argc, char *argv[])
 		free( ourSuper.indexSys );
 	if ( ourSuper.inodeList )
 		free(ourSuper.inodeList);
+	pthread_mutex_destroy(&ourSuper.ourMutex);
 	return ret;
 }

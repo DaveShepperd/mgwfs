@@ -4,8 +4,8 @@ STD = -std=gnu11
 INCS = -I/usr/include/fuse3 -I.
 WARN = -Wall
 CFLAGS = $(DBG) $(OPT) $(STD) $(INCS) $(WARN)
-SA_CFLAGS = -c -Wall -ansi -std=c99 -g
-LIBS = -lfuse3 #$(FUSE3_DIR)/lib/fuse3/libfuse3.so
+SA_CFLAGS = -g -c $(STD) $(INCS) $(WARN)
+LIBS = -lfuse3 
 LFLAGS = $(DBG) $(LIBS)
 SA_LFLAGS = -g
 CC = gcc

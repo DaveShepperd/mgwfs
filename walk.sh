@@ -1,14 +1,28 @@
 #!/bin/bash
 
-rm -f walk.bad walk.good walk.missing
-
-cd foo
-if [ $? -ne 0 ]; then
-	echo "Cannot cd to foo"
+SRC=$1
+if [ $SRC = "" ]; then
+	echo "Usage: ./walk.sh <dir>"
+	exit 1
+fi
+if [ ! -d $SRC ]; then
+	echo "$SRC is not a directory"
+	exit 1
+fi
+LIST=`pwd`/$SRC.lst
+if [ ! -s $LIST ]; then
+	echo "No such file as $LIST"
 	exit 1
 fi
 
-LIST=../foo.lst
+rm -f walk.bad walk.good walk.missing
+
+cd  $SRC
+if [ $? -ne 0 ]; then
+	echo "Cannot cd to $SRC"
+	exit 1
+fi
+
 OTHER=/d3/afsys/img_good
 bad=0
 good=0

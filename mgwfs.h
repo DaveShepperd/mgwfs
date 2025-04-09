@@ -25,14 +25,16 @@ typedef uint32_t sector_t;
 #define FSYS_FEATURES (FSYS_FEATURES_CMTIME|FSYS_FEATURES_JOURNAL)
 #include "agcfsys.h"
 
-#define MGWFS_FILENAME_MAXLEN 255
+#define MGWFS_FILENAME_MAXLEN 255		/* Techincally, the spec says filenames could be 256 bytes long, but we limit them here */
+#define MGWFS_MAX_NEST_LEVEL (64)		/* Arbitary limit on how deeply nested directories may go (just for sanity's sake) */
 
-#define n_elts(x) (sizeof(x)/sizeof(x[0]))
+#define n_elts(x) (int)(sizeof(x)/sizeof(x[0]))
 
 typedef struct MgwfsInode_t
 {
 	int idxParentInode;				/* Index to parent directory's inode */
 	int idxNextInode;				/* Index to next inode in this directory */
+	int idxPrevInode;				/* Index to previous inode in this directory */
 	int idxChildTop;				/* Index to list of inodes if this is a directory */
 	int numInodes;					/* number of inodes in this directory */
 	uint32_t inode_no;				/* file's local ID (relative to indexSys) */
@@ -109,6 +111,9 @@ typedef struct MgwfsSuper_t
 	uint32_t baseSector;	/* sector offset to start of our fs if in a partition */
 	uint32_t *indexSys;		/* contents of index.sys */
 	int indexSysDirty;		/* flag indicating index.sys contents is dirty */
+	uint32_t sectorsFree;	/* Total number of free sectors */
+	uint32_t sectorsUsed;	/* Total number of used sectors */
+	uint32_t sectorsLost;	/* Total number of sectors lost track of */
 	int freeMapEntriesUsed;	/* Number of entries used in freemap */
 	int freeMapEntriesAvail;/* Maximum number of freemap entries available */
 	FsysRetPtr *freeMap;	/* contents of freemap.sys */
@@ -193,12 +198,13 @@ extern int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id,
 extern int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr);
 extern int writeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, uint8_t *dst, int bytes);
 extern void dumpIndex(FILE *outp, uint32_t *indexBase, int bytes);
-extern void dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int entries );
+extern int dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int entries, uint32_t *totSectors );
 extern void dumpDir(FILE *outp, uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, uint32_t *indexSys );
 extern void verifyFreemap(MgwfsSuper_t *ourSuper);
 extern int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest);
 extern int tree(MgwfsSuper_t *ourSuper, int topIdx, int nest);
 extern int findInode(MgwfsSuper_t *ourSuper, int topIdx, const char *path);
+extern int countSectors(FsysRetPtr *rp, int maxRps, uint32_t *totalSectors);
 
 /*
  * Command line options

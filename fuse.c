@@ -390,9 +390,9 @@ static int mgwfs_unlink(const char *path)
 	pthread_mutex_lock(&ourSuper.ourMutex);
 	do
 	{
-		MgwfsInode_t *inode;
+		MgwfsInode_t *parent, *prev, *curr, *next;
 		MgwfsFoundFreeMap_t fmStuff;
-		FsysRetPtr lclRp, *rp;
+		FsysRetPtr *rp;
 		int ii, jj;
 		
 		idx = findInode(&ourSuper,FSYS_INDEX_ROOT,path);
@@ -401,25 +401,54 @@ static int mgwfs_unlink(const char *path)
 			retVal = -ENOENT;
 			break;
 		}
-		inode = ourSuper.inodeList+idx;
-		if ( S_ISDIR(inode->mode) )
+		curr = ourSuper.inodeList+idx;
+		if ( S_ISDIR(curr->mode) )
 		{
 			fprintf(ourSuper.logFile, "FUSE mgwfs_unlink() returned -EINVAL because '%s' (inode %d) is a directory\n", path, idx);
 			retVal = -EINVAL;
 			break;
 		}
-		memset(&fmStuff,0,sizeof(fmStuff);
-		fmStuff.
+		memset(&fmStuff,0,sizeof(fmStuff));
+		// Need to remove the filename from the directory to which this file is listed
+		/* Assume no pointers */
+		parent = NULL;
+		prev = NULL;
+		next = NULL;
+		/* Get pointer to previous inode if there is one */
+		if ( curr->idxPrevInode )
+			prev = ourSuper.inodeList+curr->idxPrevInode;
+		/* Get pointer to next inode if there is one */
+		if ( curr->idxNextInode )
+			next = ourSuper.inodeList+curr->idxNextInode;
+		/* If there's no previous, then point to the parent */
+		if ( !prev )
+			parent = ourSuper.inodeList + curr->idxParentInode;
+		/* If there's a next, then its previous gets our previous */
+		if ( next )
+			next->idxPrevInode = curr->idxPrevInode;
+		/* If there's a previous, then its next gets our next  */
+		if ( prev )
+			prev->idxNextInode = curr->idxNextInode;
+		else if ( parent )
+		{
+			/* If there's no previous, then the parent has to get a pointer to our next */
+			parent->idxChildTop = curr->idxNextInode;
+		}
+		else
+		{
+			// FATAL! Check for fatal errror here. There has to always be a parent 
+		}
+		// Need to free the sectors assigned to this file
 		for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
 		{
-			rp = inode->fsHeader.pointers[ii];
+			rp = curr->fsHeader.pointers[ii];
 			for ( jj = 0; rp->nblocks && jj < FSYS_MAX_FHPTRS; ++jj, ++rp )
 			{
-				int rv;
-				rv = mgwfsFreeSectors(&ourSuper, ourSuper. MgwfsFoundFreeMap_t *stuff, FsysRetPtr *retp)
-				
+				mgwfsFreeSectors(&ourSuper, NULL, rp);
 			}
 		}
+		// Need to free the sectors assigned to the file headers assigned to this file
+		// Need to mark the entries in index.sys as available
 	} while ( 0 );
 	pthread_mutex_unlock(&ourSuper.ourMutex);
 	return retVal;

@@ -33,4 +33,4 @@ freemap: freemap_sa.o Makefile
 	$(CC) $(SA_LFLAGS) -o $@ $<
 
 clean:
-	rm -rf Debug Release *.o mgwfs freemap
+	rm -rf Debug Release *.o mgwfs freemap freemap_sa

@@ -229,21 +229,34 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 }
 
 #define HANDLE_FREE_OVERLAPS (0)
+#define MAX_ENT_TST (4)
+#define str(xx) #xx
+#define xstr(xx) str(xx)
 
 int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRetPtr *retp)
 {
-	if ( ourSuper && stuff && retp )
+	if ( ourSuper && retp )
 	{
 		int ii;
 		FsysRetPtr *src;
 		FsysRetPtr *src1;
 		uint32_t endRetSector = retp->start + retp->nblocks;
+		char txt[256];
 
-		stuff->allocChange = 0;
+		if ( stuff )
+			stuff->allocChange = 0;
 		/* Look through the list to see if there is a connection front or back */
 		src = ourSuper->freeMap;
 		if ( (ourSuper->verbose & VERBOSE_FREE) )
-			fprintf(ourSuper->logFile,"mgwsFreeSectors(): Freeing 0x%08X-0x%08X (0x%X) sectors\n", retp->start, retp->start + retp->nblocks - 1, retp->nblocks);
+		{
+			fprintf(ourSuper->logFile, "mgwsFreeSectors(): Freeing 0x%08X-0x%08X (0x%X) sectors.\n",
+					retp->start, retp->start + retp->nblocks - 1, retp->nblocks );
+			if ( ourSuper->freeMapEntriesUsed <= MAX_ENT_TST )
+			{
+				snprintf(txt,sizeof(txt),"Dumping before free map having fewer than %d entries. Used=%d", MAX_ENT_TST, ourSuper->freeMapEntriesUsed );
+				mgwfsDumpFreeMap(ourSuper,txt,ourSuper->freeMap);
+			}
+		}
 		for ( ii = 0; src->start && src->nblocks && ii < ourSuper->freeMapEntriesUsed; ++ii, ++src )
 		{
 			uint32_t srcEnd;
@@ -260,55 +273,111 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 				src->start = retp->start;
 				src->nblocks += retp->nblocks;
 				ourSuper->freeListDirty = 1;
+				ourSuper->sectorsUsed -= retp->nblocks;
+				ourSuper->sectorsFree += retp->nblocks;
 				if ( (ourSuper->verbose & VERBOSE_FREE) )
-					fprintf(ourSuper->logFile,"mgwsFreeSectors(): Free'd in front of entry %d to 0x%08X-0x%08X (0x%X)\n", ii, src->start, src->start + src->nblocks - 1, src->nblocks);
+				{
+					fprintf(ourSuper->logFile,"mgwsFreeSectors(): Free'd in front of entry %4d of %4d to 0x%08X-0x%08X (0x%X)\n",
+							ii,
+							ourSuper->freeMapEntriesUsed,
+							src->start,
+							src->start + src->nblocks - 1,
+							src->nblocks);
+					if ( ourSuper->freeMapEntriesUsed <= MAX_ENT_TST )
+					{
+						snprintf(txt,sizeof(txt),"Dumping after free map having fewer than %d entries. Used=%d", MAX_ENT_TST, ourSuper->freeMapEntriesUsed );
+						mgwfsDumpFreeMap(ourSuper,txt,ourSuper->freeMap);
+					}
+				}
 				return 1;
 			}
 			if ( retp->start == srcEnd )
 			{
 				if ( src1->start && src1->start < endRetSector )
 				{
-					fprintf(stderr,"mgwsFreeSectors(): BUG: Tried to free 0x%08X-0x%08X (%d) which overlaps entry %d: 0x%08X-0x%08X (%d)\n",
-						   retp->start, retp->start + retp->nblocks - 1, retp->nblocks,
-						   ii + 1, src1->start, src1->start + src1->nblocks - 1, src1->nblocks);
+					snprintf(txt,sizeof(txt), "mgwsFreeSectors(): BUG 1: Tried to free 0x%08X-0x%08X (%d) which overlaps entry %d of %d: 0x%08X-0x%08X (%d)\n",
+						   retp->start,
+						   retp->start + retp->nblocks - 1,
+						   retp->nblocks,
+						   ii + 1,
+						   ourSuper->freeMapEntriesUsed,
+						   src1->start,
+						   src1->start + src1->nblocks - 1,
+						   src1->nblocks);
+					if ( 1 || ourSuper->logFile != stdout )
+						fputs(txt,ourSuper->logFile);
+					fputs(txt, ourSuper->errFile);
+					mgwfsDumpFreeMap(ourSuper,"Free list where BUG noticed",ourSuper->freeMap);
 					return 0;
 				}
-				/* We are to free behind current */
+				/* We are to free after current */
 				src->nblocks += retp->nblocks;
+				ourSuper->sectorsUsed -= retp->nblocks;
+				ourSuper->sectorsFree += retp->nblocks;
 				if ( src1->start && src1->start == endRetSector )
 				{
 					int numMove;
 					/* The free connected two sections so join them together */
 					if ( (ourSuper->verbose & VERBOSE_FREE) )
-						fprintf(ourSuper->logFile,"mgwsFreeSectors(): Joined adjacent entries %d 0x%08X-0x%08X and %d 0x%08X-0x%08X to 0x%08X-0x%08X\n",
-								ii, src->start, src->start + src->nblocks - 1,
-								ii + 1, src1->start, src1->start + src1->nblocks - 1,
+					{
+						fprintf(ourSuper->logFile,"mgwsFreeSectors(): Joined adjacent entries %4d of %4d 0x%08X-0x%08X and %d 0x%08X-0x%08X to 0x%08X-0x%08X\n",
+								ii,
+								ourSuper->freeMapEntriesUsed,
+								src->start,
+								src->start + src->nblocks - 1,
+								ii + 1,
+								src1->start,
+								src1->start + src1->nblocks - 1,
 								src->start, src->start + src->nblocks + src1->nblocks - 1);
+					}
 					src->nblocks += src1->nblocks;
 					numMove = ourSuper->freeMapEntriesUsed - ii - 2;
-					/* Delete an entry as long as it's not the last */
 					if ( numMove > 0 )
 					{
+						/* Shift the entries back one */
 						memmove(src1, src1 + 1, numMove * sizeof(FsysRetPtr));
-						--stuff->allocChange;
+						/* Signal we removed one */
 						--ourSuper->freeMapEntriesUsed;
+						if ( stuff )
+							--stuff->allocChange;
 					}
-					src1 = ourSuper->freeMap + ourSuper->freeMapEntriesUsed - 1;
+					src1 = ourSuper->freeMap + ourSuper->freeMapEntriesUsed;
 					/* The last one gets 0's */
 					src1->start = 0;
 					src1->nblocks = 0;
 				}
 				ourSuper->freeListDirty = 1;
 				if ( (ourSuper->verbose & VERBOSE_FREE) )
-					fprintf(ourSuper->logFile,"mgwsFreeSectors(): Free'd behind entry %d to 0x%08X-0x%08X (0x%X)\n", ii, src->start, src->start + src->nblocks - 1, src->nblocks);
+				{
+					fprintf(ourSuper->logFile,"mgwsFreeSectors(): Free'd after entry %4d of %4d to 0x%08X-0x%08X (0x%X)\n",
+							ii,
+							ourSuper->freeMapEntriesUsed,
+							src->start,
+							src->start + src->nblocks - 1,
+							src->nblocks);
+					if ( ourSuper->freeMapEntriesUsed <= MAX_ENT_TST )
+					{
+						snprintf(txt,sizeof(txt),"Dumping after free map having fewer than %d entries. Used=%d", MAX_ENT_TST, ourSuper->freeMapEntriesUsed );
+						mgwfsDumpFreeMap(ourSuper,txt,ourSuper->freeMap);
+					}
+				}
 				return 1;
 			}
 			if ( retp->start > srcEnd )
 				continue;               /* this should be the normal condition */
 			/* Overlap conditions should be recorded as a bug instead of being handled */
-			fprintf(stderr,"mgwsFreeSectors(): BUG: Tried to free 0x%08X-0x%08X (0x%X) which overlaps entry %d: 0x%08X-0x%08X (0x%X)\n",
-				   retp->start, retp->start + retp->nblocks - 1, retp->nblocks,
-				   ii, src->start, src->start + src->nblocks - 1, src->nblocks);
+			snprintf(txt,sizeof(txt),"mgwsFreeSectors(): BUG 2: Tried to free 0x%08X-0x%08X (0x%X) which overlaps entry %4d of %4d: 0x%08X-0x%08X (0x%X)\n",
+					 retp->start,
+					 retp->start + retp->nblocks - 1,
+					 retp->nblocks,
+					 ii,
+					 ourSuper->freeMapEntriesUsed,
+					 src->start,
+					 src->start + src->nblocks - 1,
+					 src->nblocks);
+			if ( 1 || ourSuper->logFile != stdout )
+				fputs(txt,ourSuper->logFile);
+			fputs(txt,ourSuper->errFile);
 #if !HANDLE_FREE_OVERLAPS
 			return 0;
 #else
@@ -318,7 +387,7 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 		/* Did not find anything so we need to insert a new entry at entry ii */
 		if ( ii >= ourSuper->freeMapEntriesAvail )
 		{
-			fprintf(stderr,"mgwsFreeSectors(): No room to add new free entry. ii=%d, freeMapEntriesAvail=%d\n",
+			fprintf(ourSuper->errFile,"mgwsFreeSectors(): No room to add new free entry. ii=%d, freeMapEntriesAvail=%d\n",
 					ii, ourSuper->freeMapEntriesAvail);
 			return 0;
 		}
@@ -328,22 +397,40 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 			return 0;
 		}
 		src = ourSuper->freeMap + ii;
+		/* Shift everybody up one to make room */
 		memmove(src + 1, src, (ourSuper->freeMapEntriesUsed - ii) * sizeof(FsysRetPtr));
 		src->start = retp->start;
 		src->nblocks = retp->nblocks;
 		ourSuper->freeListDirty = 1;
-		++stuff->allocChange;
+		if ( stuff )
+			++stuff->allocChange;
 		++ourSuper->freeMapEntriesUsed;
+//		ourSuper->freeMap[ourSuper->freeMapEntriesUsed].start = 0;
+//		ourSuper->freeMap[ourSuper->freeMapEntriesUsed].nblocks = 0;
+		ourSuper->sectorsUsed -= retp->nblocks;
+		ourSuper->sectorsFree += retp->nblocks;
 		if ( (ourSuper->verbose & VERBOSE_FREE) )
-			fprintf(ourSuper->logFile,"mgwsFreeSectors(): Added new last %d of 0x%08X-0x%08X (0x%X)\n", ii, src->start, src->start + src->nblocks - 1, src->nblocks);
+		{
+			fprintf(ourSuper->logFile,"mgwsFreeSectors(): Added new entry at %4d of %4d. 0x%08X-0x%08X (0x%X)\n",
+					ii,
+					ourSuper->freeMapEntriesUsed,
+					src->start,
+					src->start + src->nblocks - 1,
+					src->nblocks);
+			if ( ourSuper->freeMapEntriesUsed <= MAX_ENT_TST )
+			{
+				snprintf(txt,sizeof(txt),"Dumping after free map having fewer than %d entries. Used=%d", MAX_ENT_TST, ourSuper->freeMapEntriesUsed );
+				mgwfsDumpFreeMap(ourSuper,txt,ourSuper->freeMap);
+			}
+		}
 		return 1;
 	}
-	fprintf(stderr,"mgwsFreeSectors(): Not enough parameters provided. stuff=%p, retp=%p\n", (void *)stuff, (void *)retp);
+	fprintf(ourSuper->errFile,"mgwsFreeSectors(): Too few parameters provided. ourSuper=%p, stuff=%p, retp=%p\n", (void *)ourSuper, (void *)stuff, (void *)retp);
 	return 0;
 }
 
 #if STANDALONE_FREEMAP
-static FsysRetPtr sampleFreeMap[] =
+static const FsysRetPtr SampleFreeMap[] =
 {
 	{ 0x1000, 10 },
 	{ 0x1020, 20 },
@@ -358,9 +445,10 @@ static FsysRetPtr sampleFreeMap[] =
 
 static int help_em(const char *title)
 {
-	printf("%s [-v][-c count][-m min][-s sector][-r sector[,num]] numSectors\n"
+	printf("%s [-v][-c count][-C num][-m min][-s sector][-r sector[,num]] numSectors\n"
 		   "Where:\n"
 		   "-c count        = specify the count of sections to get\n"
+		   "-C num          = specify initial size of free list (default=7)\n"
 		   "-m min          = specify the minimum sector to look for\n"
 		   "-r sector[,num] = specify sector and optional number of sectors to return to freelist\n"
 		   "-s sector       = specify a sector hint\n"
@@ -374,12 +462,13 @@ static int help_em(const char *title)
 int main(int argc, char **argv)
 {
 	int opt, alts=1, resIdx, allocChange;
-	int numSectors, allocated;
+	int numSectors, allocated, numInit=n_elts(SampleFreeMap)-2;
 	char *endp;
 	FsysRetPtr retSec, hints[FSYS_MAX_FHPTRS];
 	MgwfsFoundFreeMap_t found;
 	MgwfsSuper_t super;
 	FsysRetPtr results[MAX_RESULTS], *rp;
+	FsysRetPtr sampleFreeMap[n_elts(SampleFreeMap)];
 	
 	memset(&found, 0, sizeof(found));
 	memset(&super, 0, sizeof(super));
@@ -389,7 +478,8 @@ int main(int argc, char **argv)
 	retSec.nblocks = 0;
 	retSec.start = 0;
 	super.logFile = stdout;
-	while ( (opt = getopt(argc, argv, "c:m:r:s:v")) != -1 )
+	super.errFile = stderr;
+	while ( (opt = getopt(argc, argv, "c:C:m:r:s:v")) != -1 )
 	{
 		switch (opt)
 		{
@@ -403,6 +493,16 @@ int main(int argc, char **argv)
 			}
 			break;
 			
+		case 'C':
+			endp = NULL;
+			numInit = strtoul(optarg, &endp, 0);
+			if ( !endp || *endp || numInit < 1 || numInit > n_elts(SampleFreeMap)-2 )
+			{
+				fprintf(stderr, "Bad argument for -C: '%s'. Can only be 1 to %d\n", optarg, n_elts(SampleFreeMap)-2);
+				return 1;
+			}
+			break;
+
 		case 'm':
 			endp = NULL;
 			found.minSector = strtoul(optarg, &endp, 0);
@@ -461,6 +561,8 @@ int main(int argc, char **argv)
 		fprintf(stderr, "Bad argument for number of sectors: '%s'\n", argv[optind]);
 		return 1;
 	}
+	memset(sampleFreeMap,0,sizeof(sampleFreeMap));
+	memcpy(sampleFreeMap, SampleFreeMap, numInit*sizeof(FsysRetPtr));
 	super.freeMap = sampleFreeMap;
 	rp = sampleFreeMap;
 	while ( rp->nblocks )

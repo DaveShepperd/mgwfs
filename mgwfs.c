@@ -143,6 +143,17 @@ void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t cksum)
 	fflush(outp);
 }
 
+int countSectors(FsysRetPtr *rp, int maxRps, uint32_t *totalSectors)
+{
+	uint32_t sectors=0;
+	int ii;
+	for ( ii = 0; rp->nblocks && ii < maxRps; ++rp, ++ii )
+		sectors += rp->nblocks;
+	if ( totalSectors )
+		*totalSectors = sectors;
+	return ii;
+}
+
 int getHomeBlock(MgwfsSuper_t *ourSuper, uint32_t *lbas, off64_t maxHb, off64_t sizeInSectors, uint32_t *ckSumP)
 {
 	FsysHomeBlock *homeBlkp = &ourSuper->homeBlk;
@@ -230,6 +241,7 @@ int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32
 	int fd, ii, good=0, match=0;
 	ssize_t sts;
 	off64_t sector;
+	uint32_t sectors;
 	
 	memset(lclHdrs,0,sizeof(lclHdrs));
 	fd = ourSuper->fd;
@@ -278,6 +290,13 @@ int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32
 				++lclFhp;
 		}
 		memcpy(fhp,lclFhp,sizeof(FsysHeader));
+		for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
+		{
+			countSectors(fhp->pointers[ii], FSYS_MAX_FHPTRS, &sectors);
+			++sectors;	/* Account for file header */
+			ourSuper->sectorsFree -= sectors;
+			ourSuper->sectorsUsed += sectors;
+		}
 	}
 	else
 	{
@@ -407,7 +426,7 @@ void dumpIndex(FILE *outp, uint32_t *indexBase, int bytes)
 	}
 }
 
-void dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int entries )
+int dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int entries, uint32_t *totalSectors )
 {
 	FsysRetPtr *rp = rpBase;
 	int ii=0;
@@ -415,7 +434,7 @@ void dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int entries 
 	
 	if ( title )
 		fprintf(outp, "%s\n", title);
-	while ( rp < rpBase+entries )
+	while ( rp < rpBase + entries )
 	{
 		freeSize += rp->nblocks;
 		fprintf(outp, "    %5d: 0x%08X-0x%08X (%d)\n", ii, rp->start, rp->nblocks ? rp->start+rp->nblocks-1:rp->start, rp->nblocks);
@@ -425,6 +444,9 @@ void dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int entries 
 		++rp;
 	}
 	fprintf(outp, "    Total size: %d sectors\n", freeSize);
+	if ( totalSectors )
+		*totalSectors = freeSize;
+	return ii;
 }
 
 void dumpDir(FILE *outp, uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, uint32_t *indexSys )
@@ -470,12 +492,19 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 	uint32_t *indexPtr;
 	MgwfsInode_t *inodePtr;
 	FsysRetPtr tmp;
+	uint32_t totalFreeSectors, totalUsedSectors, totalMergedSectors;
 	
 	/* Actually a cheat. We're using the freemap routines to
 	   build a 'used' list instead of a freelist
 	*/
+	fprintf(ourSuper->logFile, "Total entries available in free map: %d, Used in free map: %d\n", ourSuper->freeMapEntriesAvail, ourSuper->freeMapEntriesUsed);
+	fprintf(ourSuper->logFile, "Total sectors free %d, used %d, lost %d\n", ourSuper->sectorsFree, ourSuper->sectorsUsed, ourSuper->sectorsLost);
+	dumpFreemap(ourSuper->logFile, "Contents of freemap before merge:", ourSuper->freeMap, ourSuper->freeMapEntriesUsed, &totalFreeSectors);
 	memset(&super,0,sizeof(super));
 	memset(&found,0,sizeof(found));
+	super.verbose = ourSuper->verbose;
+	super.logFile = ourSuper->logFile;
+	super.errFile = ourSuper->errFile;
 	super.inodeList = (MgwfsInode_t *)calloc(FSYS_INDEX_FREE+1, sizeof(MgwfsInode_t));
 	super.inodeList[FSYS_INDEX_FREE].fsHeader.size = 0;
 	super.inodeList[FSYS_INDEX_FREE].fsHeader.clusters = 512;
@@ -488,13 +517,12 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 		ourFreeMap[idx].nblocks = 1;
 		ourFreeMap[idx].start = FSYS_HB_ALG(idx,FSYS_HB_RANGE);
 	}
-	found.listAvailable = super.freeMapEntriesAvail;
-	found.listUsed = FSYS_MAX_ALTS;
+	super.freeMapEntriesUsed = FSYS_MAX_ALTS;
 	ourSuper->verbose = 0;
 	/* Populate the rest of the used list by reading all the file headers */
 	indexPtr = ourSuper->indexSys;
 	tmp.nblocks = 1;
-	for (idx=0; idx < (ourSuper->indexSysHdr.size*BYTES_PER_SECTOR)/sizeof(uint32_t); idx += FSYS_MAX_ALTS, indexPtr += FSYS_MAX_ALTS)
+	for (idx=0; idx < ourSuper->indexSysHdr.size/sizeof(uint32_t); idx += FSYS_MAX_ALTS, indexPtr += FSYS_MAX_ALTS)
 	{
 		if ( *indexPtr && !(*indexPtr&FSYS_EMPTYLBA_BIT) )
 		{
@@ -503,6 +531,7 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 			{
 				tmp.start = indexPtr[rpIdx];
 				mgwfsFreeSectors(&super,&found,&tmp);
+				super.freeMapEntriesUsed += found.allocChange;
 			}
 		}
 	}
@@ -519,50 +548,66 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 				if ( !mgwfsFreeSectors(&super,&found,rp) )
 					break;
 				++rp;
+				super.freeMapEntriesUsed += found.allocChange;
 			}
 		}
 	}
 	ourSuper->verbose = verbSave;
-	dumpFreemap(ourSuper->logFile, "Contents of \"used\" blocks before merge:", ourFreeMap, found.listUsed);
+	dumpFreemap(ourSuper->logFile, "Contents of \"used\" blocks before merge:", ourFreeMap, super.freeMapEntriesUsed, &totalUsedSectors);
 	rp = ourFreeMap;
 	rpMax = ourFreeMap + super.freeMapEntriesAvail;
 	/* Swap freemap pointer */
 	/* ourFreeMap holds list of used sectors */
-	/* found.listUsed says how many items there are */
+	/* super.freeMapEntriesUsed says how many items there are */
 	/* Make a local copy of the actual free map contents */
 	super.freeMap = (FsysRetPtr *)malloc(ourSuper->freeMapEntriesAvail*sizeof(FsysRetPtr));
 	memcpy(super.freeMap, ourSuper->freeMap, ourSuper->freeMapEntriesAvail*sizeof(FsysRetPtr));
+	super.freeMapEntriesAvail = ourSuper->freeMapEntriesAvail;
+	super.freeMapEntriesUsed = ourSuper->freeMapEntriesUsed;
 	/* Copy the actual freemap.sys fileheader to local */
 	super.inodeList[FSYS_INDEX_FREE].fsHeader = ourSuper->inodeList[FSYS_INDEX_FREE].fsHeader;
-	found.listAvailable = ourSuper->freeMapEntriesAvail;
-	found.listUsed = ourSuper->freeMapEntriesUsed;
-	fprintf(ourSuper->logFile, "Total entries available for used list: %ld, for free list: %d\n", rpMax-rp, found.listAvailable);
+	fprintf(ourSuper->logFile, "Total entries available for used list: %ld, for free list: %d\n", rpMax-rp, super.freeMapEntriesAvail);
 	while ( rp < rpMax && rp->start && rp->nblocks )
 	{
 		mgwfsFreeSectors(&super,&found,rp);
+		super.freeMapEntriesUsed += found.allocChange;
 		++rp;
 	}
 	fprintf(ourSuper->logFile, "Free'd a total of %ld used entries\nThe following should have just one entry from 0x01 to 0x%08X\n", rp - ourFreeMap, ourSuper->homeBlk.max_lba - 1);
-	dumpFreemap(ourSuper->logFile, "Contents of freemap.sys after merge:", super.freeMap, found.listUsed);
+	dumpFreemap(ourSuper->logFile, "Contents of freemap.sys after merge:", super.freeMap, super.freeMapEntriesUsed, &totalMergedSectors);
+	fprintf(ourSuper->logFile, "Total free sectors %u, used sectors %u, (total=%u), merged sectors %u (0x%X; diff=%d). Maxlba 0x%X (%d). Lost sectors %d\n",
+			totalFreeSectors,
+			totalUsedSectors,
+			totalFreeSectors+totalUsedSectors,
+			totalMergedSectors,
+			totalMergedSectors,
+			totalFreeSectors+totalUsedSectors-totalMergedSectors,
+			ourSuper->homeBlk.max_lba,
+			ourSuper->homeBlk.max_lba,
+			ourSuper->homeBlk.max_lba-1-totalMergedSectors
+			);
 	free(super.freeMap);
 	free(super.inodeList);
 	free(ourFreeMap);
 }
 
+/* This function will unpack a directory and create a linked list of MgwfsInode_t inodes contained therein */
 int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 {
 	uint8_t *mem, *dirContents;
-	int selfIdx, ret=0, *nextPtr;
+	int selfIdx, ret=0, *nextPtr, prevIdx;
 	MgwfsInode_t *prevInodePtr, *child=NULL;
 	static const char ErrTitle[] = "unpackDir(): ERROR:";
 	
 	if ( inode->fsHeader.type != FSYS_TYPE_DIR )
 	{
+		/* The inode has to be a directory type else give up */
 		fprintf(ourSuper->logFile, "%sFile '%s' at inode %d is not a directory\n", ErrTitle, inode->fileName, inode->inode_no);
 		return -1;
 	}
 	if ( inode->idxChildTop || inode->idxNextInode )
 	{
+		/* This function has already been called with this inode so give up */
 		fprintf(ourSuper->logFile,"%sFile '%s' at inode %d has already been unpacked. Next=%d, children=%d\n",
 				ErrTitle,
 				inode->fileName, inode->inode_no,
@@ -570,6 +615,16 @@ int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 				inode->idxChildTop);
 		return -1;
 	}
+	if ( nest > MGWFS_MAX_NEST_LEVEL*2 )
+	{
+		/* Sanity check on recusion */
+		fprintf(ourSuper->logFile,"%sDirectory '%s' at inode %d is nested too deep. Nest=%d\n",
+				ErrTitle,
+				inode->fileName, inode->inode_no,
+				nest/2);
+		return -1;
+	}
+	/* Get a buffer big enough to hold the on-disk directory contents */
 	mem = dirContents = (uint8_t *)malloc(inode->fsHeader.size);
 	if ( !dirContents )
 	{
@@ -577,25 +632,31 @@ int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 				ErrTitle, inode->fsHeader.size, inode->fileName, inode->inode_no);
 		return -1;
 	}
+	/* Fill the buffer with the file contents */
 	if ( readFile(inode->fileName, ourSuper, dirContents, inode->fsHeader.size, inode->fsHeader.pointers[0] ) < 0 )
 	{
 		fprintf(ourSuper->logFile, "%sFailed to read directory file '%s' at inode 0x%04X\n", ErrTitle, inode->fileName, inode->inode_no);
 		free(dirContents);
 		return -1;
 	}
-	selfIdx = inode->inode_no;
-	prevInodePtr = inode;
-	nextPtr = &inode->idxChildTop;
+	selfIdx = inode->inode_no;		/* Get the index of the caller's inode */
+	prevInodePtr = inode;			/* remember the current inode pointer  */
+	nextPtr = &inode->idxChildTop;	/* point to place to put index should this inode be itself a directory */
+	prevIdx = 0;					/* Assume there's no previous */
 	while ( dirContents < dirContents+inode->fsHeader.size )
 	{
 		int txtLen;
 		uint8_t gen;
 		uint32_t fid;
 
+		/* Pickup the index to the inode */
 		fid = (dirContents[2]<<16)|(dirContents[1]<<8)|dirContents[0];
 		dirContents += 3;
+		/* Get the generation number */
 		gen = *dirContents++;
+		/* Get the null terminated filename length */
 		txtLen = *dirContents++;
+		/* If the index is 0, it's nfg */
 		if ( !fid )
 		{
 			if ( gen && txtLen )
@@ -613,12 +674,14 @@ int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 			}
 			break;
 		}
+		/* If the length is 0, it technically means it should be 256, but we're declaring it an error since there never were any names that long */
 		if ( !txtLen )
 		{
 			fprintf(ourSuper->logFile, "%sFound file '%s' (fid %d) in dir '%s' with invalid txtLen of 0. Probably corrupted. Skipped rest of dir\n",
 					ErrTitle, dirContents, fid, inode->fileName);
 			break;
 		}
+		/* If the index is outside the limit provided for in the index.sys file, it's nfg */
 		if ( fid >= ourSuper->numInodesAvailable )
 		{
 			fprintf(ourSuper->logFile, "%sFound file '%s' in dir '%s' with invalid fid: %d. fid must be 0 < fid < %d. Skipped\n",
@@ -626,9 +689,11 @@ int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 		}
 		else
 		{
+			/* Point to the MgwfsInode_t assigned to this file */
 			child = ourSuper->inodeList+fid;
 			if ( child->fsHeader.generation != gen )
 			{
+				/* The generation number doesn't match, so this entry is nfg */
 				fprintf(ourSuper->logFile,"%sFound file '%s' (fid %d) in dir '%s' (inode %d) with bad generation. Expected %d, was %d. Skipped\n",
 						ErrTitle,
 						dirContents, fid,
@@ -639,6 +704,7 @@ int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 			}
 			else if ( (strcmp((char *)dirContents,"..") && strcmp((char *)dirContents,".")) && (child->idxNextInode || child->idxChildTop || child->idxParentInode) )
 			{
+				/* The inode "belongs" to a different directory. We don't allow that, so this entry is nfg */
 				fprintf(ourSuper->logFile,"%sFound file '%s' (fid %d) in dir '%s' (inode %d) already assigned to a different dir '%s' (inode %d). Parent=%d. Skipped\n",
 						ErrTitle,dirContents, fid, inode->fileName, inode->inode_no,
 						child->fileName, child->inode_no, child->idxParentInode);
@@ -648,13 +714,17 @@ int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 				int skip=0;
 				if ( dirContents[0] == '.' )
 				{
+					/* Ignore the files '.' and '..' listed in the tree */
 					if ( txtLen == 2 || (txtLen == 3 && dirContents[1] == '.') )
 						skip = 1;
 				}
 				if ( !skip )
 				{
-					strncpy(child->fileName, (char *)dirContents, sizeof(child->fileName));
+					/* Copy the filename into our inode */
+					strncpy(child->fileName, (char *)dirContents, MGWFS_FILENAME_MAXLEN);
+					/* Record index of the directory that this file belongs to into the child */
 					child->idxParentInode = selfIdx;
+					/* Count the number of child inodes in this directory */
 					++inode->numInodes;
 					if ( (ourSuper->verbose&VERBOSE_UNPACK) )
 						fprintf(ourSuper->logFile,"unpackDir(): %s fid=%4d parent=%4d prev=%4d, %*s%s\n",
@@ -663,11 +733,18 @@ int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 								child->idxParentInode,
 								prevInodePtr->idxNextInode,
 								nest, "", child->fileName);
+					/* Tell previous which is next */
 					*nextPtr = fid;
+					/* Tell current what was previous */
+					child->idxPrevInode = prevIdx;
+					/* Remember the previous for next time */
+					prevIdx = fid;
+					/* Remember previous place in order place it's next */
 					nextPtr = &child->idxNextInode;
 					prevInodePtr = child;
 					if ( S_ISDIR(child->mode) )
 					{
+						/* If current child is a directory, recurse */
 						ret = unpackDir(ourSuper, child, nest + 2);
 						if ( ret )
 							return ret;
@@ -688,7 +765,7 @@ int tree(MgwfsSuper_t *ourSuper, int topIdx, int nest)
 	
 	do
 	{
-		fprintf(ourSuper->logFile, "%4d%*s%s%s\n", inode->inode_no, nest, " ", inode->fileName, S_ISDIR(inode->mode) ? "/" : "");
+		fprintf(ourSuper->logFile, "%4d%4d%*s%s%s\n", inode->inode_no, inode->idxPrevInode, nest, " ", inode->fileName, S_ISDIR(inode->mode) ? "/" : "");
 		if ( inode->idxChildTop )
 		{
 			ret = tree(ourSuper, inode->idxChildTop, nest+2 );

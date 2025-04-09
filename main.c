@@ -173,7 +173,7 @@ int main(int argc, char *argv[])
 							sizeof(uint8_t), sizeof(uint16_t), sizeof(uint32_t), sizeof(uint64_t));
 			fprintf(ourSuper.logFile, "llval=%llX, lval=%lX, int=%X\n", (long long)0x1234, (long)0x4567, (int)0x89AB);
 			fprintf(ourSuper.logFile, "FSYS_FEATURES=0x%08X, FSYS_OPTIONS=0x%08X, FSYS_MAX_ALTS=%d, FSYS_MAX_FHPTRS=%ld\n", FSYS_FEATURES, FSYS_OPTIONS, FSYS_MAX_ALTS, FSYS_MAX_FHPTRS);
-			fprintf(ourSuper.logFile, "Parts offset is 0x%04lX(%ld). s/b 0x1BE(446). Sizeof Part is %ld, s/b 16\n",
+			fprintf(ourSuper.logFile, "Partition offset is 0x%04lX(%ld). s/b 0x1BE(446). Sizeof Part is %ld, s/b 16\n",
 				   offsetof(BootSector_t,parts),offsetof(BootSector_t,parts), sizeof(Partition));
 		}
 		do
@@ -237,6 +237,8 @@ int main(int argc, char *argv[])
 				ret = -1;
 				break;
 			}
+			ourSuper.sectorsFree = ourSuper.homeBlk.max_lba-1-FSYS_MAX_ALTS;
+			ourSuper.sectorsUsed = FSYS_MAX_ALTS;
 			if ( (ourSuper.verbose&VERBOSE_HOME) )
 			{
 				fprintf(ourSuper.logFile, "Home block:\n");
@@ -328,7 +330,7 @@ int main(int argc, char *argv[])
 				{
 					"index.sys", "freemap.sys", "rootdir.sys", "journal.sys"
 				};
-				strncpy(inode->fileName, Names[ii], sizeof(inode->fileName));
+				strncpy(inode->fileName, Names[ii], MGWFS_FILENAME_MAXLEN);
 				inode->fnLen = strlen(inode->fileName);
 				inode->idxParentInode = FSYS_INDEX_ROOT;
 				inode->inode_no = ii;
@@ -336,16 +338,21 @@ int main(int argc, char *argv[])
 				/* But we need to read the contents of the freemap file */
 				if ( ii == FSYS_INDEX_FREE )
 				{
+					int jj;
+					FsysRetPtr *rp;
 					ourSuper.freeMap = (FsysRetPtr *)calloc(inode->fsHeader.clusters * 512, 1);
+					ourSuper.freeMapEntriesAvail = (inode->fsHeader.size + sizeof(FsysRetPtr) - 1) / sizeof(FsysRetPtr);
 					if ( readFile("freemap.sys", &ourSuper, (uint8_t *)ourSuper.freeMap, inode->fsHeader.size, inode->fsHeader.pointers[0]) < 0 )
 					{
 						fprintf(ourSuper.errFile,"Failed to read freemap.sys file\n");
 						ret = -1;
 						break;
 					}
+					rp = ourSuper.freeMap;
+					for ( jj = 0; rp->nblocks && jj < ourSuper.freeMapEntriesAvail; ++jj, ++rp )
+						++ourSuper.freeMapEntriesUsed;
 					if ( (ourSuper.verbose & (VERBOSE_FREEMAP | VERBOSE_VERIFY_FREEMAP)) )
 					{
-						dumpFreemap(ourSuper.logFile, "Contents of freemap.sys before merge:", ourSuper.freeMap, (inode->fsHeader.size + sizeof(FsysRetPtr) - 1) / sizeof(FsysRetPtr));
 						if ( (ourSuper.verbose & VERBOSE_VERIFY_FREEMAP) )
 						{
 							options.quit = 1;

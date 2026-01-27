@@ -81,7 +81,7 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 							--stuff->allocChange;
 							--ourSuper->freeMapEntriesUsed;
 						}
-						ourSuper->freeListDirty = 1;
+						ourSuper->freeMapDirty = 1;
 						return 1;   /* something changed */
 					}
 				}
@@ -118,7 +118,7 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 				memset(ourSuper->freeMap + ourSuper->freeMapEntriesUsed - 1, 0, sizeof(FsysRetPtr));
 				--stuff->allocChange;
 				--ourSuper->freeMapEntriesUsed;
-				ourSuper->freeListDirty = 1;
+				ourSuper->freeMapDirty = 1;
 				return 1;   /* something changed */
 			}
 		}
@@ -169,7 +169,7 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 					}
 					stuff->result.start = minSector;
 					stuff->result.nblocks = numSectors;
-					ourSuper->freeListDirty = 1;
+					ourSuper->freeMapDirty = 1;
 					return 1;   /* something changed */
 				}
 			}
@@ -183,7 +183,7 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 					stuff->result.nblocks = numSectors;
 					src->start += numSectors;
 					src->nblocks -= numSectors;
-					ourSuper->freeListDirty = 1;
+					ourSuper->freeMapDirty = 1;
 					return 1;   /* something changed */
 				}
 			}
@@ -219,7 +219,7 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 			/* remove the found section completely */
 			memmove(src, src + 1, (ourSuper->freeMapEntriesUsed - leastDiffIdx) * sizeof(FsysRetPtr));
 			memset(ourSuper->freeMap + ourSuper->freeMapEntriesUsed - 1, 0, sizeof(FsysRetPtr));
-			ourSuper->freeListDirty = 1;
+			ourSuper->freeMapDirty = 1;
 			--stuff->allocChange;
 			--ourSuper->freeMapEntriesUsed;
 			return 1;   /* something changed */
@@ -272,7 +272,7 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 				/* We are to free ahead of current */
 				src->start = retp->start;
 				src->nblocks += retp->nblocks;
-				ourSuper->freeListDirty = 1;
+				ourSuper->freeMapDirty = 1;
 				ourSuper->sectorsUsed -= retp->nblocks;
 				ourSuper->sectorsFree += retp->nblocks;
 				if ( (ourSuper->verbose & VERBOSE_FREE) )
@@ -336,6 +336,9 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 					{
 						/* Shift the entries back one */
 						memmove(src1, src1 + 1, numMove * sizeof(FsysRetPtr));
+					}
+					if ( ourSuper->freeMapEntriesUsed > 0 )
+					{
 						/* Signal we removed one */
 						--ourSuper->freeMapEntriesUsed;
 						if ( stuff )
@@ -346,7 +349,7 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 					src1->start = 0;
 					src1->nblocks = 0;
 				}
-				ourSuper->freeListDirty = 1;
+				ourSuper->freeMapDirty = 1;
 				if ( (ourSuper->verbose & VERBOSE_FREE) )
 				{
 					fprintf(ourSuper->logFile,"mgwsFreeSectors(): Free'd after entry %4d of %4d to 0x%08X-0x%08X (0x%X)\n",
@@ -391,19 +394,16 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 					ii, ourSuper->freeMapEntriesAvail);
 			return 0;
 		}
-		if ( ourSuper->freeMapEntriesUsed >= ourSuper->freeMapEntriesAvail )
-		{
-			/* technically we could expand the freemap file (buffer), but for now, just say no room */
-			return 0;
-		}
 		src = ourSuper->freeMap + ii;
 		/* Shift everybody up one to make room */
 		memmove(src + 1, src, (ourSuper->freeMapEntriesUsed - ii) * sizeof(FsysRetPtr));
 		src->start = retp->start;
 		src->nblocks = retp->nblocks;
-		ourSuper->freeListDirty = 1;
+		ourSuper->freeMapDirty = 1;
 		if ( stuff )
+		{
 			++stuff->allocChange;
+		}
 		++ourSuper->freeMapEntriesUsed;
 //		ourSuper->freeMap[ourSuper->freeMapEntriesUsed].start = 0;
 //		ourSuper->freeMap[ourSuper->freeMapEntriesUsed].nblocks = 0;

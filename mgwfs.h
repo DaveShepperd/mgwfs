@@ -110,19 +110,18 @@ typedef struct MgwfsSuper_t
 	FsysHeader indexSysHdr;	/* copy of the file header of index.sys */
 	uint32_t baseSector;	/* sector offset to start of our fs if in a partition */
 	uint32_t *indexSys;		/* contents of index.sys */
-	int indexSysDirty;		/* flag indicating index.sys contents is dirty */
+	int indexSysDirty;		/* index.sys needs updating */
 	uint32_t sectorsFree;	/* Total number of free sectors */
 	uint32_t sectorsUsed;	/* Total number of used sectors */
 	uint32_t sectorsLost;	/* Total number of sectors lost track of */
 	int freeMapEntriesUsed;	/* Number of entries used in freemap */
 	int freeMapEntriesAvail;/* Maximum number of freemap entries available */
 	FsysRetPtr *freeMap;	/* contents of freemap.sys */
-	int freeListDirty;		/* flag indicating freelist contents is dirty */
+	int freeMapDirty;		/* freemap has been updated */
 	FILE *logFile;			/* Defaults to stdout */
 	FILE *errFile;			/* Defaults to stderr */
 	FuseFH_t *fuseFHs;		/* list of fuse open files */
 	int numFuseFHs;			/* number of items available in fuseFHs */
-	FuseFH_t *fuseDirty;	/* List of fuse dirty files */
 } MgwfsSuper_t;
 
 typedef struct
@@ -130,16 +129,9 @@ typedef struct
 	FsysRetPtr result;		/* newly formed selection */
 	FsysRetPtr *hints;		/* hint of what to connect to if possible */
 	uint32_t minSector;		/* minimum sector to look for */
-//	int listUsed;			/* number of entries in list used */
-//	int listAvailable;		/* number of entries in list available */
 	int allocChange;		/* number of entries added or deleted */
+	int dirty;				/* freemap has been updated */
 } MgwfsFoundFreeMap_t;
-
-extern void mgwfsDumpFreeMap( MgwfsSuper_t *ourSuper, const char *title, const FsysRetPtr *list );
-extern int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSectors );
-extern int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRetPtr *retp);
-extern FuseFH_t *getFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx);
-extern void freeFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx);
 
 #ifndef S_IFREG
 #define S_IFREG 0100000
@@ -190,7 +182,7 @@ typedef struct
 extern BootSector_t bootSect;
 extern MgwfsSuper_t ourSuper;
 
-/* Funcions in mgwfs */
+/* Funcions in mgwfs.c */
 extern void displayFileHeader(FILE *outp, FsysHeader *fhp, int retrievalsToo);
 extern void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t cksum);
 extern int getHomeBlock(MgwfsSuper_t *ourSuper, uint32_t *lbas, off64_t maxHb, off64_t sizeInSectors, uint32_t *ckSumP);
@@ -198,14 +190,24 @@ extern int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id,
 extern int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr);
 extern int writeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, uint8_t *dst, int bytes);
 extern void dumpIndex(FILE *outp, uint32_t *indexBase, int bytes);
-extern int dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int entries, uint32_t *totSectors );
+extern int dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int maxEntries, uint32_t *totSectors );
 extern void dumpDir(FILE *outp, uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, uint32_t *indexSys );
 extern void verifyFreemap(MgwfsSuper_t *ourSuper);
 extern int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest);
 extern int tree(MgwfsSuper_t *ourSuper, int topIdx, int nest);
 extern int findInode(MgwfsSuper_t *ourSuper, int topIdx, const char *path);
 extern int countSectors(FsysRetPtr *rp, int maxRps, uint32_t *totalSectors);
+extern FuseFH_t *getFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx);
+extern void freeFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx);
+extern int writeHomeBlock(MgwfsSuper_t *super);
+extern int writeIndexSys(MgwfsSuper_t *super);
+extern int writeFreeMapSys(MgwfsSuper_t *super);
+extern int writeDirectory(MgwfsSuper_t *super, MgwfsInode_t *dir);
 
+/* functions in freemap.c */
+extern void mgwfsDumpFreeMap( MgwfsSuper_t *ourSuper, const char *title, const FsysRetPtr *list );
+extern int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSectors );
+extern int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRetPtr *retp);
 /*
  * Command line options
  */
@@ -225,6 +227,8 @@ typedef struct
 } Options_t;
 
 extern Options_t options;
+
+/* Funcions in fuse.c */
 extern const struct fuse_operations mgwfs_oper;
 
 #endif /*__MGWFS_H__*/

@@ -426,7 +426,7 @@ void dumpIndex(FILE *outp, uint32_t *indexBase, int bytes)
 	}
 }
 
-int dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int entries, uint32_t *totalSectors )
+int dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int maxEntries, uint32_t *totalSectors )
 {
 	FsysRetPtr *rp = rpBase;
 	int ii=0;
@@ -434,7 +434,7 @@ int dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int entries, 
 	
 	if ( title )
 		fprintf(outp, "%s\n", title);
-	while ( rp < rpBase + entries )
+	while ( rp < rpBase + maxEntries )
 	{
 		freeSize += rp->nblocks;
 		fprintf(outp, "    %5d: 0x%08X-0x%08X (%d)\n", ii, rp->start, rp->nblocks ? rp->start+rp->nblocks-1:rp->start, rp->nblocks);
@@ -487,51 +487,56 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 	int idx, rpIdx;
 	int verbSave = ourSuper->verbose;
 	MgwfsSuper_t super;
-	MgwfsFoundFreeMap_t found;
-	FsysRetPtr *ourFreeMap, *rp, *rpMax;
-	uint32_t *indexPtr;
+//	MgwfsFoundFreeMap_t found;
+	FsysRetPtr *ourUsedMap, *rp, *rpMax;
+	uint32_t *indexPtr, mlstrt;
 	MgwfsInode_t *inodePtr;
-	FsysRetPtr tmp;
-	uint32_t totalFreeSectors, totalUsedSectors, totalMergedSectors;
+	FsysRetPtr tmp, *missingList, *mlptr;
+	int missingListSize;
+	uint32_t totalFreeSectors, totalUsedSectors, totalMergedSectors, totalFakeFree=0;
 	
 	/* Actually a cheat. We're using the freemap routines to
 	   build a 'used' list instead of a freelist
 	*/
 	fprintf(ourSuper->logFile, "Total entries available in free map: %d, Used in free map: %d\n", ourSuper->freeMapEntriesAvail, ourSuper->freeMapEntriesUsed);
 	fprintf(ourSuper->logFile, "Total sectors free %d, used %d, lost %d\n", ourSuper->sectorsFree, ourSuper->sectorsUsed, ourSuper->sectorsLost);
-	dumpFreemap(ourSuper->logFile, "Contents of freemap before merge:", ourSuper->freeMap, ourSuper->freeMapEntriesUsed, &totalFreeSectors);
+	idx = dumpFreemap(ourSuper->logFile, "Contents of freemap before merge:", ourSuper->freeMap, ourSuper->freeMapEntriesAvail, &totalFreeSectors);
+	fprintf(ourSuper->logFile,"Total free sectors: %d, idx=%d, freeMapUsed=%d %s\n",
+			totalFreeSectors,
+			idx,
+			ourSuper->freeMapEntriesUsed,
+			idx==ourSuper->freeMapEntriesUsed ? "MATCH":" ***DIFFERENT*** ");
 	memset(&super,0,sizeof(super));
-	memset(&found,0,sizeof(found));
+//	memset(&found,0,sizeof(found));
 	super.verbose = ourSuper->verbose;
+	ourSuper->verbose = 0;
 	super.logFile = ourSuper->logFile;
 	super.errFile = ourSuper->errFile;
 	super.inodeList = (MgwfsInode_t *)calloc(FSYS_INDEX_FREE+1, sizeof(MgwfsInode_t));
 	super.inodeList[FSYS_INDEX_FREE].fsHeader.size = 0;
 	super.inodeList[FSYS_INDEX_FREE].fsHeader.clusters = 512;
-	super.freeMapEntriesAvail = (super.inodeList[FSYS_INDEX_FREE].fsHeader.clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
-	ourFreeMap = (FsysRetPtr *)calloc(super.freeMapEntriesAvail,sizeof(FsysRetPtr));
-	super.freeMap = ourFreeMap;
+	super.freeMapEntriesAvail = 2*(super.inodeList[FSYS_INDEX_FREE].fsHeader.clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
+	ourUsedMap = (FsysRetPtr *)calloc(super.freeMapEntriesAvail,sizeof(FsysRetPtr));
+	super.freeMap = ourUsedMap;
+	super.freeMapEntriesUsed = 0;
+	tmp.nblocks = 1;
 	/* Prepopulate the "used" list with the home block usage */
 	for (idx=0; idx < FSYS_MAX_ALTS; ++idx)
 	{
-		ourFreeMap[idx].nblocks = 1;
-		ourFreeMap[idx].start = FSYS_HB_ALG(idx,FSYS_HB_RANGE);
+		tmp.start = FSYS_HB_ALG(idx,FSYS_HB_RANGE);
+		mgwfsFreeSectors(&super,NULL,&tmp);
 	}
-	super.freeMapEntriesUsed = FSYS_MAX_ALTS;
-	ourSuper->verbose = 0;
 	/* Populate the rest of the used list by reading all the file headers */
 	indexPtr = ourSuper->indexSys;
-	tmp.nblocks = 1;
 	for (idx=0; idx < ourSuper->indexSysHdr.size/sizeof(uint32_t); idx += FSYS_MAX_ALTS, indexPtr += FSYS_MAX_ALTS)
 	{
-		if ( *indexPtr && !(*indexPtr&FSYS_EMPTYLBA_BIT) )
+		if ( (*indexPtr&FSYS_LBA_MASK) && !(*indexPtr&FSYS_EMPTYLBA_BIT) )
 		{
 			/* Add all the sectors of the file's header */
 			for (rpIdx=0; rpIdx < FSYS_MAX_ALTS; ++rpIdx)
 			{
 				tmp.start = indexPtr[rpIdx];
-				mgwfsFreeSectors(&super,&found,&tmp);
-				super.freeMapEntriesUsed += found.allocChange;
+				mgwfsFreeSectors(&super,NULL,&tmp);
 			}
 		}
 	}
@@ -545,36 +550,97 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 			rpMax = rp+FSYS_MAX_FHPTRS;
 			while ( rp < rpMax && rp->nblocks && rp->start )
 			{
-				if ( !mgwfsFreeSectors(&super,&found,rp) )
-					break;
+				mgwfsFreeSectors(&super,NULL,rp);
 				++rp;
-				super.freeMapEntriesUsed += found.allocChange;
 			}
 		}
 	}
 	ourSuper->verbose = verbSave;
-	dumpFreemap(ourSuper->logFile, "Contents of \"used\" blocks before merge:", ourFreeMap, super.freeMapEntriesUsed, &totalUsedSectors);
-	rp = ourFreeMap;
-	rpMax = ourFreeMap + super.freeMapEntriesAvail;
+	idx = dumpFreemap(ourSuper->logFile, "Contents of \"used\" blocks before merge:", ourUsedMap, super.freeMapEntriesAvail, &totalUsedSectors);
+	fprintf(ourSuper->logFile,"Total used sectors: %d, idx=%d, freeMapUsed=%d %s\n",
+			totalUsedSectors,
+			idx,
+			super.freeMapEntriesUsed,
+			idx==super.freeMapEntriesUsed ? "MATCH":" ***DIFFERENT*** ");
+	fprintf(ourSuper->logFile,"Total of free+used: %d. Total missing: %d\n",
+			totalFreeSectors+totalUsedSectors,
+			ourSuper->homeBlk.max_lba-1-(totalFreeSectors+totalUsedSectors)
+			);
+	rp = ourUsedMap;
+	rpMax = ourUsedMap + super.freeMapEntriesAvail;
+	missingListSize = 0;
+	missingList = NULL;
+	mlptr = NULL;
+	mlstrt = 1;
+	if ( rp->start == 1 )
+	{
+		mlstrt = rp->start+rp->nblocks;
+		++rp;
+	}
+	while ( rp < rpMax && rp->nblocks )
+	{
+		if ( !mlptr || mlptr >= missingList+missingListSize-2 )
+		{
+			int mlidx = mlptr-missingList;
+			missingListSize += 1024;
+			missingList = (FsysRetPtr *)realloc(missingList,missingListSize*sizeof(FsysRetPtr));
+			mlptr = missingList + mlidx;
+		}
+		mlptr->nblocks = rp->start-mlstrt;
+		mlptr->start = mlstrt;
+		++mlptr;
+		mlstrt = rp->start+rp->nblocks;
+		++rp;
+	}
+	if ( mlstrt < ourSuper->homeBlk.max_lba-1 && mlptr )
+	{
+		mlptr->nblocks = ourSuper->homeBlk.max_lba-1-mlstrt;
+		mlptr->start = mlstrt;
+		++mlptr;
+	}
+	if ( mlptr )
+	{
+		mlptr->nblocks = 0;
+		mlptr->start = 0;
+		++mlptr;
+		dumpFreemap(ourSuper->logFile, "Contents of \"fake\" free blocks before merge:", missingList, missingListSize, &totalFakeFree);
+		free(missingList);
+		missingList = NULL;
+	}
+	idx = rp-ourUsedMap;
 	/* Swap freemap pointer */
-	/* ourFreeMap holds list of used sectors */
-	/* super.freeMapEntriesUsed says how many items there are */
+	/* super.freeMapEntriesUsed says how many items there are in the "used" list */
 	/* Make a local copy of the actual free map contents */
-	super.freeMap = (FsysRetPtr *)malloc(ourSuper->freeMapEntriesAvail*sizeof(FsysRetPtr));
+	super.freeMapEntriesAvail = ourSuper->freeMapEntriesAvail+idx;
+	super.freeMap = (FsysRetPtr *)malloc(ourSuper->freeMapEntriesAvail * sizeof(FsysRetPtr));
 	memcpy(super.freeMap, ourSuper->freeMap, ourSuper->freeMapEntriesAvail*sizeof(FsysRetPtr));
-	super.freeMapEntriesAvail = ourSuper->freeMapEntriesAvail;
 	super.freeMapEntriesUsed = ourSuper->freeMapEntriesUsed;
 	/* Copy the actual freemap.sys fileheader to local */
 	super.inodeList[FSYS_INDEX_FREE].fsHeader = ourSuper->inodeList[FSYS_INDEX_FREE].fsHeader;
-	fprintf(ourSuper->logFile, "Total entries available for used list: %ld, for free list: %d\n", rpMax-rp, super.freeMapEntriesAvail);
+	/* ourUsedMap holds list of used sectors */
+	fprintf(ourSuper->logFile, "Total of used entries list: %d, total of free entries: %d, total of potential both used+free: %d, total available: %d\n",
+			idx,
+			super.freeMapEntriesUsed,
+			idx + super.freeMapEntriesUsed,
+			super.freeMapEntriesAvail);
+	rp = ourUsedMap;
+	rpMax = ourUsedMap + super.freeMapEntriesAvail;
+	/* Walk the list of used sectors and free them */
 	while ( rp < rpMax && rp->start && rp->nblocks )
 	{
-		mgwfsFreeSectors(&super,&found,rp);
-		super.freeMapEntriesUsed += found.allocChange;
+		mgwfsFreeSectors(&super,NULL,rp);
 		++rp;
 	}
-	fprintf(ourSuper->logFile, "Free'd a total of %ld used entries\nThe following should have just one entry from 0x01 to 0x%08X\n", rp - ourFreeMap, ourSuper->homeBlk.max_lba - 1);
-	dumpFreemap(ourSuper->logFile, "Contents of freemap.sys after merge:", super.freeMap, super.freeMapEntriesUsed, &totalMergedSectors);
+	idx = rp-ourUsedMap;
+	fprintf(ourSuper->logFile, "Free'd a total of %d used entries\nThe following should have just one entry from 0x01 to 0x%08X\n",
+			idx,
+			ourSuper->homeBlk.max_lba - 1);
+	idx = dumpFreemap(ourSuper->logFile, "Contents of freemap.sys after merge:", super.freeMap, super.freeMapEntriesAvail, &totalMergedSectors);
+	fprintf(ourSuper->logFile,"Total merged sectors: %d, idx=%d, freeMapUsed=%d %s\n",
+			totalFreeSectors,
+			idx,
+			super.freeMapEntriesUsed,
+			idx==super.freeMapEntriesUsed ? "MATCH":" ***DIFFERENT*** ");
 	fprintf(ourSuper->logFile, "Total free sectors %u, used sectors %u, (total=%u), merged sectors %u (0x%X; diff=%d). Maxlba 0x%X (%d). Lost sectors %d\n",
 			totalFreeSectors,
 			totalUsedSectors,
@@ -588,7 +654,7 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 			);
 	free(super.freeMap);
 	free(super.inodeList);
-	free(ourFreeMap);
+	free(ourUsedMap);
 }
 
 /* This function will unpack a directory and create a linked list of MgwfsInode_t inodes contained therein */
@@ -639,10 +705,10 @@ int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 		free(dirContents);
 		return -1;
 	}
-	selfIdx = inode->inode_no;		/* Get the index of the caller's inode */
+	selfIdx = inode->inode_no;      /* Get the index of the caller's inode */
 	prevInodePtr = inode;			/* remember the current inode pointer  */
 	nextPtr = &inode->idxChildTop;	/* point to place to put index should this inode be itself a directory */
-	prevIdx = 0;					/* Assume there's no previous */
+	prevIdx = 0;					/* There's no previous for the first entry in this directory */
 	while ( dirContents < dirContents+inode->fsHeader.size )
 	{
 		int txtLen;
@@ -722,6 +788,14 @@ int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 				{
 					/* Copy the filename into our inode */
 					strncpy(child->fileName, (char *)dirContents, MGWFS_FILENAME_MAXLEN);
+					if ( (ourSuper->verbose&VERBOSE_DMPROOT) && !nest )
+					{
+						fprintf(ourSuper->logFile,"rootdir.sys: gen %02X, fid=0x%06X, len=%3d, %s\n",
+								gen,
+								fid,
+								txtLen,
+								child->fileName);
+					}
 					/* Record index of the directory that this file belongs to into the child */
 					child->idxParentInode = selfIdx;
 					/* Count the number of child inodes in this directory */
@@ -869,6 +943,8 @@ int findInode(MgwfsSuper_t *ourSuper, int topIdx, const char *path)
 	return ret;
 }
 
+#define FUSEFH_INCREMENTS (64)		/* Number of new FuseFH_t structures to get at one time */
+
 static FuseFH_t *getNewFuseFHidx(MgwfsSuper_t *ourSuper)
 {
 	FuseFH_t *fhp, *nFhp;
@@ -880,37 +956,22 @@ static FuseFH_t *getNewFuseFHidx(MgwfsSuper_t *ourSuper)
 		{
 			if ( !fhp->index )
 			{
-				fhp->index = idx + 1;
-				fhp->inode = 0;
-				fhp->instances = 0;
-				fhp->offset = 0;
 				if ( fhp->buffer )
-				{
 					free(fhp->buffer);
-					fhp->buffer = NULL;
-				}
-				fhp->bufferSize = 0;
+				memset(fhp,0,sizeof(FuseFH_t));
+				fhp->index = idx + 1;
 				return fhp;
 			}
 		}
 	}
 	idx = ourSuper->numFuseFHs;
-	num = idx+64;
+	num = idx+FUSEFH_INCREMENTS;
 	fhp = (FuseFH_t *)realloc(ourSuper->fuseFHs,num*sizeof(FuseFH_t));
 	ourSuper->fuseFHs = fhp;
 	ourSuper->numFuseFHs = num;
 	nFhp = fhp + idx;
+	memset(nFhp,0,FUSEFH_INCREMENTS*sizeof(FuseFH_t));	/* Preclear all the newly added structs */
 	nFhp->index = idx+1;
-	nFhp->inode = 0;
-	nFhp->instances = 0;
-	nFhp->offset = 0;
-	if ( nFhp->buffer )
-	{
-		free(nFhp->buffer);
-		nFhp->buffer = NULL;
-	}
-	nFhp->bufferSize = 0;
-	nFhp->readAmt = 0;
 	return nFhp;
 }
 
@@ -938,5 +999,30 @@ void freeFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx)
 		fhp->bufferSize = 0;
 		fhp->readAmt = 0;
 	}
+}
+
+int writeHomeBlock(MgwfsSuper_t *super)
+{
+	return EIO;
+}
+
+int writeIndexSys(MgwfsSuper_t *super)
+{
+	return EIO;
+}
+
+int writeFreeMapSys(MgwfsSuper_t *super)
+{
+	return EIO;
+}
+
+int writeFileHeader(MgwfsSuper_t *super, MgwfsInode_t *inode)
+{
+	return EIO;
+}
+
+int writeDirectory(MgwfsSuper_t *super, MgwfsInode_t *dir)
+{
+	return EIO;
 }
 

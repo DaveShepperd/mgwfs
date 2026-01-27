@@ -11,6 +11,7 @@
 */
 
 #include "mgwfs.h"
+#include "version.h"
 
 static void helpEm(FILE *ofp, const char *progname)
 {
@@ -136,6 +137,7 @@ int main(int argc, char *argv[])
 	}
 	else if ( options.show_version )
 	{
+		printf("%s version %s\n", argv[0], VERSION);
 		assert(fuse_opt_add_arg(&args, "--version") == 0);
 		args.argv[0][0] = '\0';
 	}
@@ -156,8 +158,12 @@ int main(int argc, char *argv[])
 		ourSuper.logFile = stdout;
 		ourSuper.errFile = stderr;
 	}
-	fprintf(ourSuper.logFile, "Allocation=%ld, copies=%ld, verbose=0x%lX, imageName=%s, quit=%ld, readwrite=%ld, logFile='%s'\n",
-		   options.allocation, options.copies, options.verbose, options.image, options.quit, options.read_write, options.logFile);
+	if ( options.verbose )
+	{
+		printf("%s version %s\n", argv[0], VERSION);
+		fprintf(ourSuper.logFile, "Allocation=%ld, copies=%ld, verbose=0x%lX, imageName=%s, quit=%ld, readwrite=%ld, logFile='%s'\n",
+			   options.allocation, options.copies, options.verbose, options.image, options.quit, options.read_write, options.logFile);
+	}
 	ourSuper.verbose = options.verbose;
 	ourSuper.defaultAllocation = options.allocation;
 	ourSuper.defaultCopies = options.copies;

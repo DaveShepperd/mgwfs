@@ -309,7 +309,7 @@ static int mgwfs_read(const char *path, char *buf, size_t size, off_t offset,
 	return cpyAmt;
 }
 
-int mgwfs_release(const char *path, struct fuse_file_info *fi)
+static int mgwfs_release(const char *path, struct fuse_file_info *fi)
 {
 	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 	{
@@ -386,29 +386,38 @@ static int mgwfs_access(const char *path, int flags)
 static int mgwfs_unlink(const char *path)
 {
 	int retVal= -ENOENT, idx;
+	MgwfsSuper_t *super = &ourSuper;
+	FsysRetPtr tmp;
+	uint32_t *indexPtr;
 	
-	pthread_mutex_lock(&ourSuper.ourMutex);
+	pthread_mutex_lock(&super->ourMutex);
 	do
 	{
 		MgwfsInode_t *parent, *prev, *curr, *next;
-		MgwfsFoundFreeMap_t fmStuff;
 		FsysRetPtr *rp;
 		int ii, jj;
 		
+		if ( (super->verbose&VERBOSE_FUSE_CMD) )
+		{
+			fprintf(super->logFile, "FUSE mgwfs_unlink('%s')\n", path );
+			fflush(super->logFile);
+		}
 		idx = findInode(&ourSuper,FSYS_INDEX_ROOT,path);
 		if ( !idx )
 		{
+			if ( (super->verbose&VERBOSE_FUSE_CMD) )
+				fprintf(super->logFile, "FUSE mgwfs_unlink('%s') returned ENOENT\n", path );
 			retVal = -ENOENT;
 			break;
 		}
-		curr = ourSuper.inodeList+idx;
+		curr = super->inodeList+idx;
 		if ( S_ISDIR(curr->mode) )
 		{
-			fprintf(ourSuper.logFile, "FUSE mgwfs_unlink() returned -EINVAL because '%s' (inode %d) is a directory\n", path, idx);
+			if ( (super->verbose&VERBOSE_FUSE_CMD) )
+				fprintf(super->logFile, "FUSE mgwfs_unlink() returned -EINVAL because '%s' (inode %d) is a directory\n", path, idx);
 			retVal = -EINVAL;
 			break;
 		}
-		memset(&fmStuff,0,sizeof(fmStuff));
 		// Need to remove the filename from the directory to which this file is listed
 		/* Assume no pointers */
 		parent = NULL;
@@ -416,13 +425,13 @@ static int mgwfs_unlink(const char *path)
 		next = NULL;
 		/* Get pointer to previous inode if there is one */
 		if ( curr->idxPrevInode )
-			prev = ourSuper.inodeList+curr->idxPrevInode;
+			prev = super->inodeList+curr->idxPrevInode;
 		/* Get pointer to next inode if there is one */
 		if ( curr->idxNextInode )
-			next = ourSuper.inodeList+curr->idxNextInode;
+			next = super->inodeList+curr->idxNextInode;
 		/* If there's no previous, then point to the parent */
 		if ( !prev )
-			parent = ourSuper.inodeList + curr->idxParentInode;
+			parent = super->inodeList + curr->idxParentInode;
 		/* If there's a next, then its previous gets our previous */
 		if ( next )
 			next->idxPrevInode = curr->idxPrevInode;
@@ -431,26 +440,42 @@ static int mgwfs_unlink(const char *path)
 			prev->idxNextInode = curr->idxNextInode;
 		else if ( parent )
 		{
-			/* If there's no previous, then the parent has to get a pointer to our next */
+			/* If there's no previous, then get parent's child becomes our next */
 			parent->idxChildTop = curr->idxNextInode;
 		}
 		else
 		{
 			// FATAL! Check for fatal errror here. There has to always be a parent 
+			fprintf(super->logFile, "FUSE mgwfs_unlink('%s') returned -EIO because (inode %d) has no parent entry\n", path, idx);
+			fprintf(super->errFile, "FUSE mgwfs_unlink('%s') returned -EIO because (inode %d) has no parent entry\n", path, idx);
+			retVal = -EIO;
+			break;
 		}
+		tmp.nblocks = 1;
+		// Need to free the sectors assigned to the file headers assigned to this file
+		indexPtr = super->indexSys+(curr->inode_no*FSYS_MAX_ALTS);
+		for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
+		{
+			if ( ((tmp.start = indexPtr[ii])&FSYS_LBA_MASK) )
+			{
+				mgwfsFreeSectors(super,NULL,&tmp);
+				// Need to mark the entries in index.sys as available
+				indexPtr[ii] = FSYS_EMPTYLBA_BIT;
+			}
+		}
+		super->indexSysDirty = 1;	/* index.sys is dirty now */
 		// Need to free the sectors assigned to this file
 		for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
 		{
 			rp = curr->fsHeader.pointers[ii];
 			for ( jj = 0; rp->nblocks && jj < FSYS_MAX_FHPTRS; ++jj, ++rp )
 			{
-				mgwfsFreeSectors(&ourSuper, NULL, rp);
+				mgwfsFreeSectors(super, NULL, rp);
 			}
 		}
-		// Need to free the sectors assigned to the file headers assigned to this file
-		// Need to mark the entries in index.sys as available
 	} while ( 0 );
-	pthread_mutex_unlock(&ourSuper.ourMutex);
+	fflush(super->logFile);
+	pthread_mutex_unlock(&super->ourMutex);
 	return retVal;
 }
 

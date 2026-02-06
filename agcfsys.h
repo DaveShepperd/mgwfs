@@ -408,7 +408,7 @@ typedef struct home_block {
     uint16_t rp_size;		/* size in bytes of retrieval pointer struct */
     uint16_t cluster;		/* blocks per cluster */
     uint16_t maxalts;		/* number of alternates on this volume */
-    uint32_t def_extend;		/* default number of clusters to extend files */
+    uint32_t def_extend;		/* default number of clusters to extend files (added with version 1.2) */
     uint32_t ctime;		/* volume creation date/time */
     uint32_t mtime;		/* volume modification date/time */
     uint32_t atime;		/* volume access date/time */
@@ -417,14 +417,14 @@ typedef struct home_block {
     uint32_t features;		/* file system features */
     uint32_t options;		/* file system options */
     uint32_t index[FSYS_MAX_ALTS]; /* up to n ptrs to index.sys files */
-    uint32_t boot[FSYS_MAX_ALTS];	/* up to n ptrs to boot file */
-    uint32_t max_lba;		/* number of LBA's allocated to this volume */
-    uint32_t hb_range;		/* just for fsysdmp's benefit */
-    uint32_t upd_flag;		/* update indicator when set */
-    uint32_t boot1[FSYS_MAX_ALTS];	/* up to n ptrs to secondary boot file */
-    uint32_t boot2[FSYS_MAX_ALTS];	/* up to n ptrs to tertiary boot file */
-    uint32_t boot3[FSYS_MAX_ALTS];	/* up to n ptrs to (?)ary boot file */
-    uint32_t journal[FSYS_MAX_ALTS]; /* ptrs to the journal fileheader */
+    uint32_t boot[FSYS_MAX_ALTS];	/* up to n ptrs to boot file (added with version 1.3) */
+    uint32_t max_lba;		/* number of LBA's allocated to this volume (added with version 1.3 */
+    uint32_t hb_range;		/* just for fsysdmp's benefit (added with version 1.4) */
+    uint32_t upd_flag;		/* update indicator when set (added with version 1.5) */
+    uint32_t boot1[FSYS_MAX_ALTS];	/* up to n ptrs to secondary boot file (added with version 1.6) */
+    uint32_t boot2[FSYS_MAX_ALTS];	/* up to n ptrs to tertiary boot file (added with version 1.6) */
+    uint32_t boot3[FSYS_MAX_ALTS];	/* up to n ptrs to (?)ary boot file (added with version 1.6) */
+    uint32_t journal[FSYS_MAX_ALTS]; /* ptrs to the journal fileheader (added with version 1.7) */
 } FsysHomeBlock;
 
 /* Description of retrieval pointer */
@@ -444,11 +444,14 @@ typedef struct file_header {
     uint32_t id;			/* file header type */
     uint32_t size;			/* file size in bytes */
     uint32_t clusters;		/* number of clusters allocated for this file */
-    unsigned char generation;		/* file's generation number */
-    unsigned char type;			/* file type (see above for types) */
-    uint16_t flags;		/* spare (to fill out to longword) */
+    uint8_t generation;		/* file's generation number */
+    uint8_t type;			/* file type (see above for types) */
+        /* flags field was present but not initialized in version 1.1 */
+        /* flags field got FSYS_FH_FLAGS_NEW bit in version 1.2 */
+        /* flags field got FSYS_FH_FLAGS_OPEN bit in version 1.3 */
 #define FSYS_FH_FLAGS_NEW	(0x0001) /* File is newly created but not closed */
 #define FSYS_FH_FLAGS_OPEN	(0x0002) /* File was opened for write but not closed */
+    uint16_t flags;		/* flag bits as described above */
 #if (FSYS_FEATURES&FSYS_FEATURES_EXTENSION_HEADER)
     uint32_t extension;		/* index to file header extension */
 # define FSYS_FHEADER_EXT	1

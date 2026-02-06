@@ -89,10 +89,14 @@ typedef struct
 	uint32_t inode;			/* file ID of open file */
 	int instances;			/* number of times this file is open() */
 	uint8_t *buffer;		/* file content buffer */
-	int bufferSize;			/* size of content buffer */
-	uint32_t offset;		/* number of bytes read from this file so far */
+	uint32_t bufferSize;	/* size of content buffer */
+	uint32_t offset;		/* index to next byte to read or write */
 	int readAmt;			/* return value from readFile() */
+	int writeAmt;			/* amount stored in buffer so far */
+	int opwnForWrite;		/* true if file opened for write */
 } FuseFH_t;
+
+#define MAX_DIRTY_INODE 100
 
 typedef struct MgwfsSuper_t
 {
@@ -103,21 +107,24 @@ typedef struct MgwfsSuper_t
 	uint32_t verbose;		/* verbose flags */
 	int defaultAllocation;	/* Default number of sectors to allocate on file extend */
 	int defaultCopies;		/* Default number of copies to make of new files */
-	MgwfsInode_t *inodeList; /* List of our files maintained as local inodes */
+	MgwfsInode_t **inodeList; /* List of our files maintained as local inodes */
 	int numInodesUsed;		/* number of items in list */
 	int numInodesAvailable; /* number of items available in list */
+	int dirtyInodes[MAX_DIRTY_INODE];
+	int numDirtyInodes;
+	int indexSysDirty;		/* index.sys needs updating */
+	int freeMapDirty;		/* freemap has been updated */
+	uint32_t homeLbas[FSYS_MAX_ALTS];
 	FsysHomeBlock homeBlk;	/* A copy of our home block from disk */
 	FsysHeader indexSysHdr;	/* copy of the file header of index.sys */
 	uint32_t baseSector;	/* sector offset to start of our fs if in a partition */
 	uint32_t *indexSys;		/* contents of index.sys */
-	int indexSysDirty;		/* index.sys needs updating */
 	uint32_t sectorsFree;	/* Total number of free sectors */
 	uint32_t sectorsUsed;	/* Total number of used sectors */
 	uint32_t sectorsLost;	/* Total number of sectors lost track of */
 	int freeMapEntriesUsed;	/* Number of entries used in freemap */
 	int freeMapEntriesAvail;/* Maximum number of freemap entries available */
 	FsysRetPtr *freeMap;	/* contents of freemap.sys */
-	int freeMapDirty;		/* freemap has been updated */
 	FILE *logFile;			/* Defaults to stdout */
 	FILE *errFile;			/* Defaults to stderr */
 	FuseFH_t *fuseFHs;		/* list of fuse open files */
@@ -183,12 +190,23 @@ extern BootSector_t bootSect;
 extern MgwfsSuper_t ourSuper;
 
 /* Funcions in mgwfs.c */
+/* File primitives called by fuse functions */
+extern int fileOpen(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
+extern int fileClose(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
+extern int fileRename(const char *title, MgwfsSuper_t *ourSuper, const char *oldPath, const char *newPath);
+extern int fileRead(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
+extern int fileCreate(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
+extern int fileExtend(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
+extern int fileWrite(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
+extern int fileFlush(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
+
 extern void displayFileHeader(FILE *outp, FsysHeader *fhp, int retrievalsToo);
 extern void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t cksum);
-extern int getHomeBlock(MgwfsSuper_t *ourSuper, uint32_t *lbas, off64_t maxHb, off64_t sizeInSectors, uint32_t *ckSumP);
+extern int getHomeBlock(MgwfsSuper_t *ourSuper, off64_t maxHb, off64_t sizeInSectors, uint32_t *ckSumP);
 extern int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp);
 extern int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr);
-extern int writeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, uint8_t *dst, int bytes);
+extern int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
+extern int flushFile(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern void dumpIndex(FILE *outp, uint32_t *indexBase, int bytes);
 extern int dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int maxEntries, uint32_t *totSectors );
 extern void dumpDir(FILE *outp, uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, uint32_t *indexSys );
@@ -203,6 +221,7 @@ extern int writeHomeBlock(MgwfsSuper_t *super);
 extern int writeIndexSys(MgwfsSuper_t *super);
 extern int writeFreeMapSys(MgwfsSuper_t *super);
 extern int writeDirectory(MgwfsSuper_t *super, MgwfsInode_t *dir);
+extern int findUnusedInode(MgwfsSuper_t *super);
 
 /* functions in freemap.c */
 extern void mgwfsDumpFreeMap( MgwfsSuper_t *ourSuper, const char *title, const FsysRetPtr *list );
@@ -230,5 +249,6 @@ extern Options_t options;
 
 /* Funcions in fuse.c */
 extern const struct fuse_operations mgwfs_oper;
+extern void mgwfsAddToDirty(MgwfsSuper_t *super, int idx);
 
 #endif /*__MGWFS_H__*/

@@ -110,8 +110,8 @@ int main(int argc, char *argv[])
 {
 	int ii;
 	int ret;
-	uint32_t homeLbas[FSYS_MAX_ALTS], ckSum;
-	MgwfsInode_t *inode;
+	uint32_t ckSum;
+	MgwfsInode_t *inode, **inodePtr;
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
 
 	/* Parse options */
@@ -237,16 +237,20 @@ int main(int argc, char *argv[])
 			if ( (ourSuper.verbose&VERBOSE_HOME) && ii >= 4 )
 				fprintf(ourSuper.logFile, "No parition table found\n");
 			for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
-				homeLbas[ii] = FSYS_HB_ALG(ii, maxHb);
-			if ( !getHomeBlock(&ourSuper,homeLbas,maxHb,sizeInSectors,&ckSum) )
+				ourSuper.homeLbas[ii] = FSYS_HB_ALG(ii, maxHb);
+			if ( !getHomeBlock(&ourSuper,maxHb,sizeInSectors,&ckSum) )
 			{
 				ret = -1;
 				break;
 			}
-			ourSuper.sectorsFree = ourSuper.homeBlk.max_lba-1-FSYS_MAX_ALTS;
+			if ( !ourSuper.homeBlk.max_lba )
+				ourSuper.homeBlk.max_lba = sizeInSectors;
+			ourSuper.sectorsFree = ourSuper.homeBlk.max_lba - 1 - FSYS_MAX_ALTS;
 			ourSuper.sectorsUsed = FSYS_MAX_ALTS;
 			if ( (ourSuper.verbose&VERBOSE_HOME) )
 			{
+				fprintf(ourSuper.logFile,"Found home blocks at sectors 0x%08X, 0x%08X, 0x%08X\n",
+						ourSuper.homeLbas[0],ourSuper.homeLbas[1],ourSuper.homeLbas[2]);
 				fprintf(ourSuper.logFile, "Home block:\n");
 				displayHomeBlock(ourSuper.logFile,&ourSuper.homeBlk,ckSum);
 			}
@@ -276,22 +280,39 @@ int main(int argc, char *argv[])
 			}
 			/* First read all the fileheaders in the filesystem */
 			/* Get some memory to hold all the local inodes */
-			ourSuper.inodeList = (MgwfsInode_t *)calloc(ourSuper.numInodesAvailable, sizeof(MgwfsInode_t));
+			ourSuper.inodeList = (MgwfsInode_t **)calloc(ourSuper.numInodesAvailable, sizeof(MgwfsInode_t *));
 			if ( !ourSuper.inodeList )
 			{
-				fprintf(ourSuper.errFile, "Sorry. Not enough memory to hold %d inodes (%ld bytes)\n", ourSuper.numInodesAvailable, sizeof(MgwfsInode_t) * ourSuper.numInodesAvailable);
+				fprintf(ourSuper.errFile, "Sorry. Not enough memory to hold %d inode pointers (%ld bytes)\n", ourSuper.numInodesAvailable, sizeof(MgwfsInode_t *) * ourSuper.numInodesAvailable);
 				close(ourSuper.fd);
 				return 1;
 			}
-			inode = ourSuper.inodeList;
+			inodePtr = ourSuper.inodeList;
+			inode = (MgwfsInode_t *)calloc(1,sizeof(MgwfsInode_t));
+			if ( !inode )
+			{
+				fprintf(ourSuper.errFile, "Sorry. Not enough memory to hold an inode for index.sys (%ld bytes)\n",
+						sizeof(MgwfsInode_t));
+				close(ourSuper.fd);
+				return 1;
+			}
 			memcpy(&inode->fsHeader, &ourSuper.indexSysHdr, sizeof(FsysHeader));
-			++inode;
+			*inodePtr++ = inode;
 			ret = 0;
-			for (ii=1; ii < ourSuper.numInodesAvailable; ++ii, ++inode)
+			for (ii=1; ii < ourSuper.numInodesAvailable; ++ii)
 			{
 				char tmpName[32];
 				uint32_t *lbas;
 				
+				inode = (MgwfsInode_t *)calloc(1,sizeof(MgwfsInode_t));
+				if ( !inode )
+				{
+					fprintf(ourSuper.errFile, "Sorry. Not enough memory to hold an inode for file %d (%ld bytes)\n",
+							ii, sizeof(MgwfsInode_t));
+					close(ourSuper.fd);
+					return 1;
+				}
+				*inodePtr++ = inode;
 				lbas = ourSuper.indexSys + ii * FSYS_MAX_ALTS;
 				if ( !*lbas )
 					break;
@@ -326,16 +347,17 @@ int main(int argc, char *argv[])
 				fprintf(ourSuper.logFile, "Inode info: inode size: %ld, inodesAvailable: %d, inodesUsed: %d\n", sizeof(MgwfsInode_t), ourSuper.numInodesAvailable, ourSuper.numInodesUsed);
 			}
 			/* The first 4 files don't actually belong to any directory and have no name, so fake it */
-			inode = ourSuper.inodeList;
+			inodePtr = ourSuper.inodeList;
 			fLim = 4;
 			if ( !ourSuper.homeBlk.journal[0] )
 				fLim = 3;
-			for ( ii = 0; ii < fLim; ++ii, ++inode )
+			for ( ii = 0; ii < fLim; ++ii, ++inodePtr )
 			{
 				static const char * const Names[] = 
 				{
 					"index.sys", "freemap.sys", "rootdir.sys", "journal.sys"
 				};
+				inode = *inodePtr;
 				strncpy(inode->fileName, Names[ii], MGWFS_FILENAME_MAXLEN);
 				inode->fnLen = strlen(inode->fileName);
 				inode->idxParentInode = FSYS_INDEX_ROOT;
@@ -347,7 +369,7 @@ int main(int argc, char *argv[])
 					int jj;
 					FsysRetPtr *rp;
 					ourSuper.freeMap = (FsysRetPtr *)calloc(inode->fsHeader.clusters * 512, 1);
-					ourSuper.freeMapEntriesAvail = (inode->fsHeader.size + sizeof(FsysRetPtr) - 1) / sizeof(FsysRetPtr);
+					ourSuper.freeMapEntriesAvail = (inode->fsHeader.clusters*512 + sizeof(FsysRetPtr) - 1) / sizeof(FsysRetPtr);
 					if ( readFile("freemap.sys", &ourSuper, (uint8_t *)ourSuper.freeMap, inode->fsHeader.size, inode->fsHeader.pointers[0]) < 0 )
 					{
 						fprintf(ourSuper.errFile,"Failed to read freemap.sys file\n");
@@ -376,7 +398,7 @@ int main(int argc, char *argv[])
 			}
 			if ( ret < 0 )
 				break;
-			inode = ourSuper.inodeList + FSYS_INDEX_ROOT; /* Point to the root directory */
+			inode = ourSuper.inodeList[FSYS_INDEX_ROOT]; /* Point to the root directory */
 			inode->idxParentInode = FSYS_INDEX_ROOT;
 			unpackDir(&ourSuper, inode, 0); /* Create the entire filesystem directory tree */
 			if ( (ourSuper.verbose&VERBOSE_ITERATE) )
@@ -400,8 +422,16 @@ int main(int argc, char *argv[])
 		close(ourSuper.fd);
 	if ( ourSuper.indexSys )
 		free( ourSuper.indexSys );
-	if ( ourSuper.inodeList )
+	if ( (inodePtr = ourSuper.inodeList) )
+	{
+		for (ii=0; ii < ourSuper.numInodesAvailable; ++ii, ++inodePtr)
+		{
+			if ( *inodePtr )
+				free(*inodePtr);
+			*inodePtr = NULL;
+		}
 		free(ourSuper.inodeList);
+	}
 	pthread_mutex_destroy(&ourSuper.ourMutex);
 	return ret;
 }

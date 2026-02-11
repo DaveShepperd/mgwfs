@@ -518,6 +518,211 @@ int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 	return retSize;
 }
 
+int fileOpen(const char *title, const char *path, MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
+{
+	if ( (ourSuper->verbose&(VERBOSE_FUSE|VERBOSE_FUSE_CMD)) )
+		fprintf(ourSuper->logFile, "%s: fileOpen() path='%s', flags=0x%X)\n", title, path, fhp->openFlags);
+	/* Nothing to do here yet. So just return 0 */
+	return 0;
+}
+
+int fileFlush(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
+{
+	if ( (fhp->openFlags&(O_WRONLY|O_RDWR)) )
+		 return -EIO;
+	return 0;
+}
+
+int fileClose(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
+{
+	if ( (fhp->openFlags&(O_WRONLY|O_RDWR)) )
+	{
+	}
+	return 0;
+}
+
+int fileRename(const char *title, MgwfsSuper_t *ourSuper, const char *oldPath, const char *newPath)
+{
+	return -EIO;
+}
+
+int fileRead(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp, off_t offset, size_t bytes)
+{
+	if ( (fhp->openFlags&(O_WRONLY|O_RDWR)) )
+		return -EIO;
+	return 0;
+}
+
+MgwfsInode_t *findUnusedInode(MgwfsSuper_t *ourSuper)
+{
+	int idx;
+	MgwfsInode_t *inode;
+	
+	for ( idx = FSYS_INDEX_JOURNAL + 1; idx < ourSuper->numInodesUsed; ++idx )
+	{
+		if ( !ourSuper->inodeList[idx] )
+			break;
+	}
+	if ( idx >= ourSuper->numInodesAvailable )
+	{
+		MgwfsInode_t **inodePtr;
+#define INODE_ADDS (FSYS_DEFAULT_EXTEND*BYTES_PER_SECTOR/(sizeof(uint32_t)*FSYS_MAX_ALTS))
+		int newNum = ourSuper->numInodesAvailable+INODE_ADDS;
+
+		inodePtr = (MgwfsInode_t **)realloc(ourSuper->inodeList, newNum*sizeof(MgwfsInode_t));
+		if ( !inodePtr )
+		{
+			fprintf(ourSuper->logFile, "findUnusedInode(): failed to allocate %ld bytes for more inodes\n", newNum*sizeof(MgwfsInode_t));
+			fflush(ourSuper->logFile);
+			return NULL;
+		}
+		ourSuper->numInodesAvailable = newNum;
+		ourSuper->inodeList = inodePtr;
+		if ( (ourSuper->verbose&(VERBOSE_WRITES)) )
+			fprintf(ourSuper->logFile, "findUnusedInode(): Added an additional inode to list. inodesAvailable was %d, now is %d\n", ourSuper->numInodesUsed, ourSuper->numInodesUsed+1);
+		++ourSuper->numInodesUsed;
+	}
+	else
+	{
+		if ( (ourSuper->verbose&(VERBOSE_WRITES)) )
+			fprintf(ourSuper->logFile, "findUnusedInode(): Reused inode %d.\n", idx);
+	}
+	inode = (MgwfsInode_t *)calloc(1,sizeof(MgwfsInode_t));
+	inode->inode_no = idx;
+	inode->fsHeader.ctime = time(NULL);
+	inode->fsHeader.id = FSYS_ID_HEADER;
+	ourSuper->inodeList[idx] = inode;
+	return inode;
+}
+
+int fileExtend(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
+{
+	MgwfsInode_t *inode;
+	MgwfsFoundFreeMap_t fMap;
+	FsysRetPtr *rp, *rp1;
+	int lastRp;
+	
+	inode = ourSuper->inodeList[fhp->inode];
+	rp = inode->fsHeader.pointers[0];
+	rp1 = rp+1;
+	lastRp = 0;
+	if ( rp->nblocks )
+	{
+		for ( lastRp = 1; lastRp < FSYS_MAX_FHPTRS; ++lastRp, ++rp1, ++rp )
+		{
+			if ( !rp1->nblocks )
+				break;
+		}
+		if ( lastRp >= FSYS_MAX_FHPTRS )
+		{
+			fprintf(ourSuper->logFile, "fileExtend(): No more retrieval pointers to extend file '%s'. Returned ENOSPC\n", inode->fileName);
+			return -ENOSPC;
+		}
+	}
+	memset(&fMap,0,sizeof(fMap));
+	fMap.hints = rp;
+	if ( !mgwfsFindFree(ourSuper, &fMap, ourSuper->homeBlk.def_extend) )
+	{
+		fprintf(ourSuper->logFile,"fileExtend(): No room to extend file '%s' by %d sectors. Returned ENOSPC\n", inode->fileName, ourSuper->homeBlk.def_extend);
+		return -ENOSPC;
+	}
+	inode->fsHeader.clusters += ourSuper->homeBlk.def_extend;
+	if ( fMap.result.start != rp->start )
+	{
+		rp1->start = fMap.result.start;
+		rp1->nblocks = fMap.result.nblocks;
+		if ( (ourSuper->verbose&(VERBOSE_WRITES)) )
+			fprintf(ourSuper->logFile, "%s: fileExtend('%s'). Added a new retrival pointer at %d: 0x%X/0x%X\n", title, inode->fileName, lastRp, rp1->start, rp1->nblocks);
+	}
+	else
+	{
+		if ( (ourSuper->verbose&(VERBOSE_WRITES)) )
+		{
+			fprintf(ourSuper->logFile, "%s: fileExtend('%s'). Changed retrival pointer at %d: from 0x%X/0x%X to 0x%X/0x%X\n",
+					title,
+					inode->fileName,
+					lastRp,
+					rp->start, rp->nblocks,
+					fMap.result.start, fMap.result.nblocks);
+		}
+		rp->nblocks = fMap.result.nblocks;
+	}
+	return 0;
+}
+
+static void insertIntoDir(MgwfsSuper_t *ourSuper, uint32_t dirTop , MgwfsInode_t *fileInode)
+{
+	MgwfsInode_t *dirInode;
+	MgwfsInode_t *inode;
+	uint32_t idx;
+	
+	dirInode = ourSuper->inodeList[dirTop];
+	if ( dirInode && (idx=dirInode->idxChildTop) )
+	{
+		while ( idx )
+		{
+			int cmp;
+			
+			inode = ourSuper->inodeList[idx];
+			if ( !inode )
+				return;
+			if ( strcmp(inode->fileName, ".") && strcmp(inode->fileName, "..") )
+			{
+				cmp = strcmp(fileInode->fileName, inode->fileName);
+				if ( cmp < 0 )
+				{
+					MgwfsInode_t *prev = ourSuper->inodeList[inode->idxPrevInode];
+					prev->idxNextInode = fileInode->inode_no;
+					inode->idxPrevInode = fileInode->inode_no;
+					fileInode->idxPrevInode = prev->inode_no;
+					fileInode->idxNextInode = inode->idxNextInode;
+					fileInode->idxParentInode = dirTop;
+					return;
+				}
+			}
+			idx = inode->idxNextInode;
+		}
+	}
+}
+
+int fileCreate(const char *title, const char *path,  MgwfsSuper_t *ourSuper)
+{
+	int sLen;
+	uint32_t idx;
+	MgwfsInode_t *inode;
+	char *dir;
+	char *tmpDir;
+	
+	if ( (ourSuper->verbose&(VERBOSE_FUSE|VERBOSE_FUSE_CMD)) )
+		fprintf(ourSuper->logFile, "%s: fileCreate() path='%s'\n", title, path);
+	inode = findUnusedInode(ourSuper);
+	if ( !inode )
+	{
+		fprintf(ourSuper->logFile, "%s: fileCreate() for '%s' failed to find empty inode, returned ENOSPC\n", title, path);
+		return -ENOSPC;
+	}
+	if ( *path == '/' )
+		++path;
+	sLen = strlen(path)+1;
+	tmpDir = (char *)malloc(sLen);
+	strncpy(tmpDir,path,sLen);
+	dir = strrchr(tmpDir,'/');
+	if ( dir )
+		*dir = 0;
+	else
+		dir = tmpDir;
+	idx = findInode(ourSuper, FSYS_INDEX_ROOT, tmpDir);
+	insertIntoDir(ourSuper,idx,inode);
+	fflush(ourSuper->logFile);
+	free(tmpDir);
+	return 0;
+}
+
+int fileWrite(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp, off_t offset, size_t bytes)
+{
+	return -EIO;
+}
+
 void dumpIndex(FILE *outp, uint32_t *indexBase, int bytes)
 {
 	int ii=0;

@@ -62,6 +62,7 @@ enum
 	VERB_BIT_ITERATE,
 	VERB_BIT_FUSE,
 	VERB_BIT_FUSE_CMD,
+	VERB_BIT_WRITES,
 	VERB_BIT_MAX
 };
 
@@ -81,6 +82,7 @@ enum
 #define VERBOSE_ITERATE		(1<<VERB_BIT_ITERATE)	/* iterate directory tree */
 #define VERBOSE_FUSE		(1<<VERB_BIT_FUSE)		/* Show fuse stuff */
 #define VERBOSE_FUSE_CMD	(1<<VERB_BIT_FUSE_CMD)	/* Show fuse commands */
+#define VERBOSE_WRITES		(1<<VERB_BIT_WRITES)	/* Show details of anything related to file writes */
 #define VERBOSE_ANY			((1<<VERB_BIT_MAX)-1)	/* Any verbose bit */
 
 typedef struct
@@ -93,7 +95,7 @@ typedef struct
 	uint32_t offset;		/* index to next byte to read or write */
 	int readAmt;			/* return value from readFile() */
 	int writeAmt;			/* amount stored in buffer so far */
-	int opwnForWrite;		/* true if file opened for write */
+	int openFlags;			/* flags passed in on open() */
 } FuseFH_t;
 
 #define MAX_DIRTY_INODE 100
@@ -191,13 +193,13 @@ extern MgwfsSuper_t ourSuper;
 
 /* Funcions in mgwfs.c */
 /* File primitives called by fuse functions */
-extern int fileOpen(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
+extern int fileOpen(const char *title, const char *path, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern int fileClose(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern int fileRename(const char *title, MgwfsSuper_t *ourSuper, const char *oldPath, const char *newPath);
-extern int fileRead(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
-extern int fileCreate(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
+extern int fileRead(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp, off_t offset, size_t bytes);
+extern int fileCreate(const char *title, const char *path, MgwfsSuper_t *ourSuper);
 extern int fileExtend(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
-extern int fileWrite(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
+extern int fileWrite(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp, off_t offset, size_t bytes);
 extern int fileFlush(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 
 extern void displayFileHeader(FILE *outp, FsysHeader *fhp, int retrievalsToo);
@@ -221,7 +223,7 @@ extern int writeHomeBlock(MgwfsSuper_t *super);
 extern int writeIndexSys(MgwfsSuper_t *super);
 extern int writeFreeMapSys(MgwfsSuper_t *super);
 extern int writeDirectory(MgwfsSuper_t *super, MgwfsInode_t *dir);
-extern int findUnusedInode(MgwfsSuper_t *super);
+extern MgwfsInode_t *findUnusedInode(MgwfsSuper_t *super);
 
 /* functions in freemap.c */
 extern void mgwfsDumpFreeMap( MgwfsSuper_t *ourSuper, const char *title, const FsysRetPtr *list );

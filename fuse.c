@@ -177,29 +177,6 @@ static int mgwfs_readdir(const char *path,
 	return 0;
 }
 
-static int createFile(const char *path, struct fuse_file_info *fi)
-{
-	int idx;
-
-// DB is already locked
-#if 0
-	idx =  findUnusedInode(&ourSuper);
-	if ( idx > 0 )
-	{
-		MgwfsInode_t *inode;
-		FuseFH_t *fhp;
-	}
-	else
-	{
-		fprintf(ourSuper.logFile, "FUSE createFile(): returned ENOSPC because findUnusedInode() failed with %d for '%s'\n", idx, path);
-#endif
-		idx = -ENOSPC;
-#if 0
-	}
-#endif
-	return idx;
-}
-
 static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 {
 	MgwfsInode_t *inode;
@@ -215,9 +192,9 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 		fflush(ourSuper.logFile);
 		return -EACCES;
 	}
-	if ( (fi->flags & (O_RDWR | O_TRUNC | O_APPEND )) )
+	if ( (fi->flags & (O_TRUNC | O_APPEND )) )
 	{
-		fprintf(ourSuper.logFile, "FUSE mgwfs_open() returned -EPERM because '%s' RDWR, TRUNC and APPEND are not supported at present.\n", path);
+		fprintf(ourSuper.logFile, "FUSE mgwfs_open() returned -EPERM because '%s' TRUNC and APPEND are not supported at present.\n", path);
 		fflush(ourSuper.logFile);
 		return -EPERM;
 	}
@@ -234,7 +211,7 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 				retVal = -EEXIST;
 				break;
 			}
-			idx = createFile(path,fi);
+			idx = fileCreate("mgwfs_open()", path, &ourSuper);
 			if ( idx < 0 )
 			{
 				retVal = idx;
@@ -277,14 +254,14 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 		fhp->inode = idx;
 		fhp->offset = 0;
 		fhp->readAmt = 0;
-		fhp->opwnForWrite = (fi->flags & (O_RDWR | O_TRUNC | O_APPEND | O_WRONLY | O_CREAT));
+		fhp->openFlags = fi->flags;
 		fi->fh = fhp->index;
 		if ((ourSuper.verbose&VERBOSE_FUSE_CMD))
 		{
-			fprintf(ourSuper.logFile, "FUSE mgwfs_open() returned success on open of '%s', inode %d and FHidx %d\n", path, idx, fhp->index);
+			fprintf(ourSuper.logFile, "FUSE mgwfs_open() returned success on open of '%s', inode %d and FHidx %d, flags=0x%X\n", path, idx, fhp->index, fhp->openFlags);
 			fflush(ourSuper.logFile);
 		}
-		retVal = 0;
+		retVal = fileOpen("mgwfs_open()", path, &ourSuper, fhp);
 	} while (0);
 	if ( retVal )
 		fflush(ourSuper.logFile);
@@ -331,6 +308,7 @@ static int readLocked(const char *path, char *buf, size_t size, off_t offset,
 			fhp->instances = 1;
 			fhp->offset = 0;
 			fhp->readAmt = 0;
+			fhp->openFlags = O_RDONLY;
 		}
 		else
 		{
@@ -421,7 +399,7 @@ static int mgwfs_release(const char *path, struct fuse_file_info *fi)
 		fhp = getFuseFHidx(&ourSuper,fi->fh);
 		if ( --fhp->instances <= 0 )
 		{
-			if ( fhp->opwnForWrite )
+			if ( (fhp->openFlags&(O_RDWR|O_WRONLY)) )
 			{
 				sts = flushFile("mwgfs_release(): ", &ourSuper, fhp);
 				if ( sts > 0 )

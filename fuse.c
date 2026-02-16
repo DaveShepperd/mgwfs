@@ -186,23 +186,19 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 	
 	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 		fprintf(ourSuper.logFile, "FUSE mgwfs_open(path='%s',fi->fh=%ld, fi->flags=0x%X)\n", path, fi->fh, fi->flags);
+#if 0
 	if ( !options.read_write && (fi->flags & (O_RDWR | O_TRUNC | O_APPEND | O_WRONLY | O_CREAT )) )
 	{
 		fprintf(ourSuper.logFile, "FUSE mgwfs_open() returned -EACCESS because '%s' is mounted read-only.\n", path);
 		fflush(ourSuper.logFile);
 		return -EACCES;
 	}
-	if ( (fi->flags & (O_TRUNC | O_APPEND )) )
-	{
-		fprintf(ourSuper.logFile, "FUSE mgwfs_open() returned -EPERM because '%s' TRUNC and APPEND are not supported at present.\n", path);
-		fflush(ourSuper.logFile);
-		return -EPERM;
-	}
+#endif
 	do
 	{
 		pthread_mutex_lock(&ourSuper.ourMutex);
 		idx = findInode(&ourSuper,FSYS_INDEX_ROOT,path);
-		if ( !options.read_write && (fi->flags & O_CREAT) )
+		if ( options.read_write && (fi->flags & O_CREAT) )
 		{
 			if ( idx )
 			{
@@ -252,23 +248,38 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 		fhp = getFuseFHidx(&ourSuper, 0);
 		++fhp->instances;
 		fhp->inode = idx;
-		fhp->offset = 0;
-		fhp->readAmt = 0;
 		fhp->openFlags = fi->flags;
 		fi->fh = fhp->index;
+		retVal = 0;
 		if ((ourSuper.verbose&VERBOSE_FUSE_CMD))
+			fprintf(ourSuper.logFile, "FUSE mgwfs_open(%s) returned success on open, inode %d and FHidx %d, flags=0x%X\n", path, idx, fhp->index, fhp->openFlags);
+		retVal = fileOpen("FUSE mgwfs_open()", path, &ourSuper, fhp);
+		fhp->rwBuffSize = inode->fsHeader.clusters*BYTES_PER_SECTOR;
+		fhp->rwBuff = (uint8_t *)malloc(fhp->rwBuffSize);
+		/* Read the whole file into a local buffer */
+		fhp->rwBuffErr = readFile("FUSE mgwfs_open():", &ourSuper, fhp->rwBuff, inode->fsHeader.size, inode->fsHeader.pointers[0]);
+		if ( fhp->rwBuffErr >= 0 )
 		{
-			fprintf(ourSuper.logFile, "FUSE mgwfs_open() returned success on open of '%s', inode %d and FHidx %d, flags=0x%X\n", path, idx, fhp->index, fhp->openFlags);
-			fflush(ourSuper.logFile);
+			fhp->rwBuffUsed = fhp->rwBuffErr;
+			if ( (fi->flags&(O_WRONLY|O_RDWR)) )
+			{
+				if ( (fi->flags & O_TRUNC) )
+					fhp->rwBuffUsed = 0;
+				if ( (fi->flags & O_APPEND) )
+					fhp->rwBuffOffset = fhp->rwBuffUsed;
+			}
 		}
-		retVal = fileOpen("mgwfs_open()", path, &ourSuper, fhp);
+		else
+		{
+			fprintf(ourSuper.logFile, "FUSE mgwfs_open('%s') readFile() returned error %d.\n", path, fhp->rwBuffErr );
+		}
 	} while (0);
-	if ( retVal )
-		fflush(ourSuper.logFile);
+	fflush(ourSuper.logFile);
 	pthread_mutex_unlock(&ourSuper.ourMutex);
 	return retVal;
 }
 
+#if 0
 static int readLocked(const char *path, char *buf, size_t size, off_t offset,
 		      struct fuse_file_info *fi)
 {
@@ -302,12 +313,10 @@ static int readLocked(const char *path, char *buf, size_t size, off_t offset,
 				break;
 			}
 			fhp = &lclFhp;
+			memset(fhp,0,sizeof(lclFhp));
 			fhp->index = 1;
-			fhp->buffer = NULL;
 			fhp->inode = idx;
 			fhp->instances = 1;
-			fhp->offset = 0;
-			fhp->readAmt = 0;
 			fhp->openFlags = O_RDONLY;
 		}
 		else
@@ -317,68 +326,148 @@ static int readLocked(const char *path, char *buf, size_t size, off_t offset,
 		}
 		if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 		{
-			fprintf(ourSuper.logFile, "FUSE readLocked('%s'): fhp=%s, fhp->readAmt=%d, offset=%d, bsize=%d\n",
-					path,
-					fhp != &lclFhp ? "allocated":"local",
-					fhp->readAmt,
-					fhp->offset,
-					fhp->bufferSize
+			fprintf(ourSuper.logFile, "FUSE readLocked('%s'): fhp=%s, fhp->readAmt=%d, offset=%ld, bsize=%d\n"
+					,path
+					,fhp != &lclFhp ? "allocated":"local"
+					,fhp->rwBuffUsed
+					,fhp->rwBuffOffset
+					,fhp->rwBuffSize
 					);
 			fflush(ourSuper.logFile);
 		}
 		if ( offset >= inode->fsHeader.size )
 		{
-			fhp->offset = offset;
+			fhp->rwBuffOffset = offset;
 			cpyAmt = 0;
 			break;
 		}
-		if ( !fhp->readAmt || !fhp->buffer || fhp->bufferSize < inode->fsHeader.size )
+		if ( !fhp->rwBuffUsed || !fhp->rwBuff || fhp->rwBuffSize < inode->fsHeader.size )
 		{
-			if ( fhp->buffer )
-				free(fhp->buffer);
-			fhp->bufferSize = inode->fsHeader.size;
-			fhp->buffer = (uint8_t *)malloc(inode->fsHeader.size);
+			if ( fhp->rwBuff )
+				free(fhp->rwBuff);
+			fhp->rwBuffSize = inode->fsHeader.size;
+			fhp->rwBuff = (uint8_t *)malloc(inode->fsHeader.size);
 			/* Read the whole file into a local buffer */
-			fhp->readAmt = readFile("FUSE readLocked():", &ourSuper, fhp->buffer, inode->fsHeader.size, inode->fsHeader.pointers[0]);
-			if ( fhp->readAmt < 0 )
+			fhp->rwBuffUsed = readFile("FUSE readLocked():", &ourSuper, fhp->rwBuff, inode->fsHeader.size, inode->fsHeader.pointers[0]);
+			if ( fhp->rwBuffUsed < 0 )
 			{
-				fprintf(ourSuper.logFile, "FUSE readLocked('%s') readFile() returned error %d. offset=%ld\n", path, fhp->readAmt, offset );
-				cpyAmt = fhp->readAmt;
+				fprintf(ourSuper.logFile, "FUSE readLocked('%s') readFile() returned error %d. offset=%ld\n", path, fhp->rwBuffUsed, offset );
+				cpyAmt = fhp->rwBuffUsed;
 				break;
 			}
 		}
-		if ( fhp->readAmt > 0 )
+		if ( fhp->rwBuffUsed > 0 )
 		{
 			cpyAmt = size;
 			if ( cpyAmt+offset > (off_t)inode->fsHeader.size )
 				cpyAmt = inode->fsHeader.size-offset;
 			if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 			{
-				fprintf(ourSuper.logFile, "FUSE readLocked('%s') copying %d bytes. offset=%ld, readAmt=%d\n", path, cpyAmt, offset, fhp->readAmt );
+				fprintf(ourSuper.logFile, "FUSE readLocked('%s') copying %d bytes. offset=%ld, readAmt=%d\n", path, cpyAmt, offset, fhp->rwBuffUsed );
 			}
-			memcpy(buf,fhp->buffer+offset,cpyAmt);
-			fhp->offset += size;
+			memcpy(buf,fhp->rwBuff+offset,cpyAmt);
+			fhp->rwBuffOffset += size;
 		}
 		else
 		{
-			fprintf(ourSuper.logFile, "FUSE readLocked('%s') readFile() failed with %d\n", path, fhp->readAmt );
+			fprintf(ourSuper.logFile, "FUSE readLocked('%s') readFile() failed with %d\n", path, fhp->rwBuffUsed );
 		}
-		if ( fhp == &lclFhp && fhp->buffer )
+		if ( fhp == &lclFhp && fhp->rwBuff )
 		{
-			free(fhp->buffer);
-			fhp->buffer = NULL;
+			free(fhp->rwBuff);
+			fhp->rwBuff = NULL;
 		}
 	} while (0);
 	fflush(ourSuper.logFile);
 	return cpyAmt;
 }
+#endif
 
 static int mgwfs_read(const char *path, char *buf, size_t size, off_t offset,
 		      struct fuse_file_info *fi)
 {
-	int retVal;
+	int retVal = -EIO;
+	FuseFH_t *fhp;
+	MgwfsInode_t *inode;
+	
 	pthread_mutex_lock(&ourSuper.ourMutex);
-	retVal = readLocked(path,buf,size,offset,fi);
+	do
+	{
+		size_t cpyAmt;
+
+		fhp = getFuseFHidx(&ourSuper, fi->fh);
+		if ( !fhp )
+		{
+			fprintf(ourSuper.logFile, "FUSE mgwfs_read('%s', %ld, 0x%lX): not opened. Returned -EIO\n"
+					,path
+					,size
+					,offset
+					);
+			break;
+		}
+		if ( fhp->rwBuffErr < 0 )
+		{
+			fprintf(ourSuper.logFile, "FUSE mgwfs_read('%s', %ld, 0x%lX): Found rwBuffErr=%d\n"
+					,path
+					,size
+					,offset
+					,fhp->rwBuffErr
+					);
+			retVal = fhp->rwBuffErr;
+			break;
+		}
+		inode = ourSuper.inodeList[fhp->inode];
+		if ( !inode )
+		{
+			fprintf(ourSuper.logFile, "FUSE mgwfs_read('%s', %ld, 0x%lX): No inode found. Returned -EIO\n"
+					,path
+					,size
+					,offset
+					);
+			break;
+		}
+		if ( (ourSuper.verbose & VERBOSE_FUSE_CMD) )
+		{
+			fprintf(ourSuper.logFile, "FUSE mgwfs_read('%s', %ld, 0x%lX): fhp->rwBuffUsed=%d, wrBuffOffset=%ld, reBuffSize=%d, rwBuffErr=%d\n"
+					,path
+					,size
+					,offset
+					,fhp->rwBuffUsed
+					,fhp->rwBuffOffset
+					,fhp->rwBuffSize
+					,fhp->rwBuffErr
+					);
+			fflush(ourSuper.logFile);
+		}
+		cpyAmt = 0;
+		if ( fhp->rwBuffUsed > 0 )
+		{
+			off_t adjOffset = offset;
+			cpyAmt = size;
+			if ( adjOffset > fhp->rwBuffUsed )
+				adjOffset = fhp->rwBuffUsed;
+			if ( cpyAmt + adjOffset > fhp->rwBuffUsed )
+				cpyAmt = fhp->rwBuffUsed-adjOffset;
+			if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+			{
+				fprintf(ourSuper.logFile, "FUSE mgwfs_read('%s', %ld, 0x%lX) cpyAmt=%ld, adjOffset=%ld, rwBuffUsed=%d\n",
+						path,
+						size,
+						offset,
+						cpyAmt,
+						adjOffset,
+						fhp->rwBuffUsed );
+			}
+			if ( cpyAmt > 0 )
+			{
+				memcpy(buf, fhp->rwBuff + adjOffset, cpyAmt);
+				fhp->rwBuffOffset += cpyAmt;
+			}
+		}
+		retVal = cpyAmt;
+	} while (0);
+	if ( retVal < 0 )
+		fflush(ourSuper.logFile);
 	pthread_mutex_unlock(&ourSuper.ourMutex);
 	return retVal;
 }
@@ -399,12 +488,7 @@ static int mgwfs_release(const char *path, struct fuse_file_info *fi)
 		fhp = getFuseFHidx(&ourSuper,fi->fh);
 		if ( --fhp->instances <= 0 )
 		{
-			if ( (fhp->openFlags&(O_RDWR|O_WRONLY)) )
-			{
-				sts = flushFile("mwgfs_release(): ", &ourSuper, fhp);
-				if ( sts > 0 )
-					sts = 0;
-			}
+			sts = fileClose("mgwfs_release():",&ourSuper,fhp);
 			freeFuseFHidx(&ourSuper, fi->fh);
 			fi->fh = 0;
 		}
@@ -583,15 +667,38 @@ static int mgwfs_unlink(const char *path)
 	return retVal;
 }
 
+static off_t addToBuff(FuseFH_t *fhp, const char *path, off_t off)
+{
+	if ( off >= fhp->rwBuffSize )
+	{
+		uint8_t *newPtr;
+		int sectors = (off+BYTES_PER_SECTOR-1)/BYTES_PER_SECTOR;
+		int bytes = sectors*BYTES_PER_SECTOR;
+		newPtr = (uint8_t *)realloc(fhp->rwBuff, bytes);
+		if ( !newPtr )
+		{
+			fprintf(ourSuper.logFile, "FUSE addToBuff(%s,0x%lX). Out of memory to allocate %d bytes.\n", path, off, bytes );
+			return -ENOMEM;
+		}
+		fhp->rwBuff = newPtr;
+		fhp->rwBuffSize = bytes;
+		memset(fhp->rwBuff+fhp->rwBuffUsed,0,fhp->rwBuffSize-fhp->rwBuffUsed);
+	}
+	if ( off > fhp->rwBuffUsed )
+		fhp->rwBuffUsed = off;
+	fhp->rwBuffOffset = off;
+	return off;
+}
+
 static int mgwfs_write (const char *path, const char *buf, size_t size, off_t offset, struct fuse_file_info *fi)
 {
 	MgwfsInode_t *inode;
-	FuseFH_t lclFhp, *fhp=NULL;
+	FuseFH_t *fhp=NULL;
 	int cpyAmt= -EIO;
-
+	
 	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 	{
-		fprintf(ourSuper.logFile, "FUSE mgwfs_write(path='%s',buf=%p,size=%ld,offset=%ld, fi->fh=%ld\n", path, buf, size, offset, fi->fh );
+		fprintf(ourSuper.logFile, "FUSE mgwfs_write('%s',%p,%ld,0x%lX,%ld\n", path, buf, size, offset, fi->fh );
 		fflush(ourSuper.logFile);
 	}
 	do
@@ -599,7 +706,7 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 		pthread_mutex_lock(&ourSuper.ourMutex);
 		if ( !fi->fh )
 		{
-			fprintf(ourSuper.logFile, "FUSE mgwfs_write() returned -EPERM because '%s' has not been open()'d\n", path);
+			fprintf(ourSuper.logFile, "FUSE mgwfs_write('%s',%p,%ld,0x%lX,%ld) returned -EPERM because has not been open()'d\n", path, buf, size, offset, fi->fh);
 			cpyAmt = -EPERM;
 			break;
 		}
@@ -614,20 +721,31 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 		}
 		if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 		{
-			fprintf(ourSuper.logFile, "FUSE mgwfs_write('%s'): fhp=%s, fhp->readAmt=%d, offset=%d, bsize=%d\n",
-					path,
-					fhp != &lclFhp ? "allocated":"local",
-					fhp->readAmt,
-					fhp->offset,
-					fhp->bufferSize
+			fprintf(ourSuper.logFile, "FUSE mgwfs_write('%s',%p,%ld,0x%lX,%ld): rwBuffUsed=%d, rwBuffOffset=%ld, rwBuffSize=%d\n"
+					,path
+					,buf
+					,size
+					,offset
+					,fi->fh
+					,fhp->rwBuffUsed
+					,fhp->rwBuffOffset
+					,fhp->rwBuffSize
 					);
 			fflush(ourSuper.logFile);
 		}
-		if ( fhp->bufferSize < (uint32_t)offset+size )
+		if ( size + offset > fhp->rwBuffSize )
 		{
+			off_t currOffset = fhp->rwBuffOffset;
+			cpyAmt = addToBuff(fhp,path,offset+size);
+			if ( cpyAmt < 0 )
+				break;
+			fhp->rwBuffOffset = currOffset;
 		}
-		// *** You need to write this function ***
-		// Just say it worked.
+		cpyAmt = size;
+		memcpy(fhp->rwBuff + fhp->rwBuffOffset, buf, cpyAmt);
+		fhp->rwBuffOffset += cpyAmt;
+		if ( fhp->rwBuffOffset > fhp->rwBuffUsed )
+			fhp->rwBuffUsed = fhp->rwBuffOffset;
 	} while (0);
 	pthread_mutex_unlock(&ourSuper.ourMutex);
 	fflush(ourSuper.logFile);
@@ -638,7 +756,8 @@ static int mgwfs_flush(const char *path, struct fuse_file_info *fi)
 {
 	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 	{
-		fprintf(ourSuper.logFile, "FUSE mgwfs_flush(path='%s', fi->fh=%ld\n", path, fi->fh );
+		fprintf(ourSuper.logFile, "FUSE mgwfs_flush(path='%s', fi->fh=%ld. returned %s\n",
+				path, fi->fh, options.read_write ? "-EIO":"0" );
 		fflush(ourSuper.logFile);
 	}
 	if (!options.read_write)
@@ -689,9 +808,115 @@ static int mgwfs_create(const char *path, mode_t fMode, struct fuse_file_info *f
 	return -EIO;
 }
 
+static off_t moveOffset(const char *path, FuseFH_t *fhp, off_t off)
+{
+	if ( off < 0 )
+		off = 0;
+	if ( off <= fhp->rwBuffUsed )
+	{
+		fhp->rwBuffOffset = off;
+		return off;
+	}
+	if ( !(fhp->openFlags & (O_RDWR | O_WRONLY)) )
+	{
+		/* read only, cannot go past EOF */
+		if ( off >= fhp->rwBuffUsed )
+			off = fhp->rwBuffUsed;
+		fhp->rwBuffOffset = off;
+		return off;
+	}
+	/* r/w or wo, maybe add to end of file */
+	return addToBuff(fhp,path,off);
+}
+
+static off_t lseek_locked(const char *path, off_t off, int whence, struct fuse_file_info *fi)
+{
+	off_t newOff, sts = -EIO;
+
+	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+	{
+		static const char *Seeks[] = { "SEEK_SET", "SEEK_CUR", "SEEK_END" };
+		const char *sp;
+		char tmp[32];
+		int idx = whence;
+		
+		if ( idx >= n_elts(Seeks) )
+		{
+			snprintf(tmp,sizeof(tmp),"SEEK_%d",idx);
+			sp = tmp;
+		}
+		else
+			sp = Seeks[whence];
+		fprintf(ourSuper.logFile, "FUSE lseek_locked(%s,%ld,%s,%ld)\n", path, off, sp, fi->fh);
+		fflush(ourSuper.logFile);
+	}
+	if ( fi->fh )
+	{
+		FuseFH_t *fhp;
+
+		fhp = getFuseFHidx(&ourSuper,fi->fh);
+		if ( fhp )
+		{
+			switch (whence)
+			{
+			case SEEK_SET:
+				sts = moveOffset(path,fhp,off);
+				break;
+
+			case SEEK_CUR:
+				newOff = fhp->rwBuffOffset+off;
+				sts = moveOffset(path,fhp,newOff);
+				break;
+
+			case SEEK_END:
+				newOff = fhp->rwBuffUsed+off;
+				sts = moveOffset(path,fhp,newOff);
+				break;
+				
+			default:
+				break;
+			}
+		}
+	}
+	return sts;
+}
+
 static off_t mgwfs_lseek(const char *path, off_t off, int whence, struct fuse_file_info *fi)
 {
-	return -EIO;
+	off_t sts;
+	pthread_mutex_lock(&ourSuper.ourMutex);
+	sts = lseek_locked(path,off,whence,fi);
+	pthread_mutex_unlock(&ourSuper.ourMutex);
+	return sts;
+}
+
+static int mgwfs_truncate(const char *path, off_t offset, struct fuse_file_info *fi)
+{
+	int sts = -EIO;
+
+	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+	{
+		fprintf(ourSuper.logFile, "FUSE mgwfs_lseek(%s,0x%lX,%ld)\n", path, offset, fi->fh );
+		fflush(ourSuper.logFile);
+	}
+	if ( fi->fh )
+	{
+		FuseFH_t *fhp;
+		
+		pthread_mutex_lock(&ourSuper.ourMutex);
+		fhp = getFuseFHidx(&ourSuper, fi->fh);
+		if ( (fhp->openFlags & (O_RDWR|O_WRONLY)) )
+		{
+			sts = lseek_locked(path,offset,SEEK_SET,fi);
+			if ( sts >= 0 )
+			{
+				fhp->rwBuffUsed = offset;
+				fhp->rwBuffOffset = offset;
+			}
+		}
+		pthread_mutex_unlock(&ourSuper.ourMutex);
+	}
+	return sts;
 }
 
 const struct fuse_operations mgwfs_oper =
@@ -714,13 +939,13 @@ const struct fuse_operations mgwfs_oper =
 	.rename		= mgwfs_rename,		// int (*rename) (const char *oldName, const char *newName, unsigned int flags);
 	.create		= mgwfs_create,		// int (*create) (const char *, mode_t, struct fuse_file_info *);
 	.lseek		= mgwfs_lseek,		// off_t (*lseek) (const char *, off_t off, int whence, struct fuse_file_info *);
-#if 0
 	.truncate	= mgwfs_truncate,	// int (*truncate) (const char *, off_t, struct fuse_file_info *fi);
-	.write_buf	= mgwfs_write_buf,	// int (*write_buf) (const char *, struct fuse_bufvec *buf, off_t off, struct fuse_file_info *);
+#if 0
 	.fallocate	= mgwfs_fallocate,	// int (*fallocate) (const char *, int, off_t, off_t, struct fuse_file_info *);
 #endif
 #if 0
 	.read_buf	= mgwfs_read_buf,	// int (*read_buf) (const char *, struct fuse_bufvec **bufp, size_t size, off_t off, struct fuse_file_info *);
+	.write_buf	= mgwfs_write_buf,	// int (*write_buf) (const char *, struct fuse_bufvec *buf, off_t off, struct fuse_file_info *);
 	.utimens	= mgwfst_utimens,	// int (*utimens) (const char *, const struct timespec tv[2], struct fuse_file_info *fi);
 #endif
 #if 0	/* No support for these functions (yet; probably never) */

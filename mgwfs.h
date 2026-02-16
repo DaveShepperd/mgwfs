@@ -90,12 +90,12 @@ typedef struct
 	int index;				/* Our index into the list */
 	uint32_t inode;			/* file ID of open file */
 	int instances;			/* number of times this file is open() */
-	uint8_t *buffer;		/* file content buffer */
-	uint32_t bufferSize;	/* size of content buffer */
-	uint32_t offset;		/* index to next byte to read or write */
-	int readAmt;			/* return value from readFile() */
-	int writeAmt;			/* amount stored in buffer so far */
 	int openFlags;			/* flags passed in on open() */
+	uint8_t *rwBuff;		/* Pointer to read buffer */
+	uint32_t rwBuffSize;	/* Size of read buffer (will be multiple of sector size) */
+	off_t rwBuffOffset;		/* Offset of last byte read from rdBuff */
+	uint32_t rwBuffUsed;	/* Total bytes used in rdBuff */
+	int rwBuffErr;
 } FuseFH_t;
 
 #define MAX_DIRTY_INODE 100
@@ -196,7 +196,7 @@ extern MgwfsSuper_t ourSuper;
 extern int fileOpen(const char *title, const char *path, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern int fileClose(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern int fileRename(const char *title, MgwfsSuper_t *ourSuper, const char *oldPath, const char *newPath);
-extern int fileRead(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp, off_t offset, size_t bytes);
+//extern int fileRead(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp, off_t offset, size_t bytes);
 extern int fileCreate(const char *title, const char *path, MgwfsSuper_t *ourSuper);
 extern int fileExtend(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern int fileWrite(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp, off_t offset, size_t bytes);
@@ -207,7 +207,7 @@ extern void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t
 extern int getHomeBlock(MgwfsSuper_t *ourSuper, off64_t maxHb, off64_t sizeInSectors, uint32_t *ckSumP);
 extern int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp);
 extern int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr);
-extern int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
+//extern int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern int flushFile(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern void dumpIndex(FILE *outp, uint32_t *indexBase, int bytes);
 extern int dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int maxEntries, uint32_t *totSectors );

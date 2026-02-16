@@ -396,67 +396,78 @@ int flushFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 	return -EIO;
 }
 
-int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
+static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 {
 	off64_t sector;
 	int alts, rps, ptrIdx=0, retSize=0, blkLimit;
 	ssize_t limit;
 	FsysRetPtr *retPtr;
-	uint32_t nblocks;
 	MgwfsFoundFreeMap_t stuff;
 	MgwfsInode_t *inode;
-	int inodeIdx = fhp->inode;
-//	const uint8_t *src = fhp->buffer;
-	int bytes = fhp->writeAmt;
+	int bytes;
+	uint32_t sectors;
+//	const uint8_t *src = fhp->rwBuff;
 //	ssize_t rdSts;
 //	int fd = ourSuper->fd;
 	
-	inode = ourSuper->inodeList[inodeIdx];
-	/* Terribly inefficient, but who cares? */
-	/* First, free all existing retrieval pointers */
-	for (alts=0; alts < FSYS_MAX_ALTS; ++alts )
+	sectors = (fhp->rwBuffSize+BYTES_PER_SECTOR-1)/BYTES_PER_SECTOR;
+	bytes = sectors*BYTES_PER_SECTOR;
+	inode = ourSuper->inodeList[fhp->inode];
+	/* We only write copy 0, so free sectors used by duplicate files, if any */
+	for ( alts = 1; alts < FSYS_MAX_ALTS; ++alts )
 	{
 		for (rps=0; rps < FSYS_MAX_FHPTRS; ++rps)
 		{
 			retPtr = inode->fsHeader.pointers[alts]+rps;
-			if ( retPtr->nblocks )
-			{
-				mgwfsFreeSectors(ourSuper,NULL,retPtr);
-				retPtr->nblocks = 0;
-				retPtr->start = 0;
-			}
+			if ( !retPtr->nblocks )
+				break;
+			mgwfsFreeSectors(ourSuper,NULL,retPtr);
+			retPtr->nblocks = 0;
+			retPtr->start = 0;
 		}
 	}
-	/* Next, allocate all the necessary RP's for the entire file. */
-	/* mgwfs always only keeps one copy on disk */
-	memset(&stuff,0,sizeof(stuff));
-	nblocks = (bytes + BYTES_PER_SECTOR - 1) / BYTES_PER_SECTOR;
-	ptrIdx = 0;
-	inode->fsHeader.clusters = nblocks;
-	while ( nblocks > 0 )
+	/* If the file has gotten bigger, free existing retrieval pointers to copy 0 */
+	if ( sectors > inode->fsHeader.clusters )
 	{
-		if ( ptrIdx >= FSYS_MAX_FHPTRS )
+		for (rps=0; rps < FSYS_MAX_FHPTRS; ++rps)
 		{
-			fprintf(ourSuper->errFile,"%s: Ran out room for retrieval pointers for '%s'\n",
-					title,
-					inode->fileName
-					);
-			return -ENOSPC;
+			retPtr = inode->fsHeader.pointers[0]+rps;
+			if ( !retPtr->nblocks )
+				break;
+			mgwfsFreeSectors(ourSuper,NULL,retPtr);
+			retPtr->nblocks = 0;
+			retPtr->start = 0;
 		}
-		if ( !mgwfsFindFree(ourSuper, &stuff, nblocks) )
+		/* Next, allocate all the necessary RP's for the entire file. */
+		memset(&stuff,0,sizeof(stuff));
+		ptrIdx = 0;
+		retPtr = inode->fsHeader.pointers[0] + 0;
+		inode->fsHeader.clusters = sectors;
+		while ( sectors > 0 )
 		{
-			fprintf(ourSuper->errFile,"%s: Ran out of room trying to allocate %d sectors for '%s'\n",
-					title,
-					nblocks,
-					inode->fileName
-					);
-			return -ENOSPC;
+			if ( ptrIdx >= FSYS_MAX_FHPTRS )
+			{
+				fprintf(ourSuper->errFile,"%s: Ran out room for retrieval pointers for '%s'\n",
+						title,
+						inode->fileName
+						);
+				return -ENOSPC;
+			}
+			if ( !mgwfsFindFree(ourSuper, &stuff, sectors) )
+			{
+				fprintf(ourSuper->errFile,"%s: Ran out of room trying to allocate %d sectors for '%s'\n",
+						title,
+						sectors,
+						inode->fileName
+						);
+				return -ENOSPC;
+			}
+			retPtr = inode->fsHeader.pointers[0] + ptrIdx;
+			retPtr->nblocks = stuff.result.nblocks;
+			retPtr->start = stuff.result.start;
+			sectors -= stuff.result.nblocks;
+			++ptrIdx;
 		}
-		retPtr = inode->fsHeader.pointers[0] + ptrIdx;
-		retPtr->nblocks = stuff.result.nblocks;
-		retPtr->start = stuff.result.start;
-		nblocks -= stuff.result.nblocks;
-		++ptrIdx;
 	}
 	/* write the file to disk */
 	retPtr = inode->fsHeader.pointers[0] + 0;
@@ -520,23 +531,26 @@ int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 
 int fileOpen(const char *title, const char *path, MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 {
-	if ( (ourSuper->verbose&(VERBOSE_FUSE|VERBOSE_FUSE_CMD)) )
-		fprintf(ourSuper->logFile, "%s: fileOpen() path='%s', flags=0x%X)\n", title, path, fhp->openFlags);
 	/* Nothing to do here yet. So just return 0 */
 	return 0;
 }
 
 int fileFlush(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 {
-	if ( (fhp->openFlags&(O_WRONLY|O_RDWR)) )
-		 return -EIO;
+	/* Nothing to do here yet. So just return 0 */
 	return 0;
 }
 
 int fileClose(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 {
-	if ( (fhp->openFlags&(O_WRONLY|O_RDWR)) )
+	if ( (fhp->openFlags&(O_RDWR|O_WRONLY)) )
 	{
+		int sts;
+		MgwfsInode_t *inode = ourSuper->inodeList[fhp->inode];
+		inode->fsHeader.mtime = time(NULL);
+		sts = writeWholeFile(title,ourSuper,fhp);
+		if ( sts >= 0 )
+			sts = 0;
 	}
 	return 0;
 }
@@ -546,12 +560,12 @@ int fileRename(const char *title, MgwfsSuper_t *ourSuper, const char *oldPath, c
 	return -EIO;
 }
 
-int fileRead(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp, off_t offset, size_t bytes)
-{
-	if ( (fhp->openFlags&(O_WRONLY|O_RDWR)) )
-		return -EIO;
-	return 0;
-}
+//int fileRead(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp, off_t offset, size_t bytes)
+//{
+//	if ( (fhp->openFlags&(O_WRONLY|O_RDWR)) )
+//		return -EIO;
+//	return 0;
+//}
 
 MgwfsInode_t *findUnusedInode(MgwfsSuper_t *ourSuper)
 {
@@ -1288,9 +1302,9 @@ static FuseFH_t *getNewFuseFHidx(MgwfsSuper_t *ourSuper)
 		{
 			if ( !fhp->index )
 			{
-				if ( fhp->buffer )
-					free(fhp->buffer);
-				memset(fhp,0,sizeof(FuseFH_t));
+				if ( fhp->rwBuff )
+					free(fhp->rwBuff);
+				memset(fhp, 0, sizeof(FuseFH_t));
 				fhp->index = idx + 1;
 				return fhp;
 			}
@@ -1319,17 +1333,9 @@ void freeFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx)
 	if ( idx )
 	{
 		FuseFH_t *fhp = ourSuper->fuseFHs + (idx - 1);
-		fhp->index = 0;
-		fhp->inode = 0;
-		fhp->instances = 0;
-		fhp->offset = 0;
-		if ( fhp->buffer )
-		{
-			free(fhp->buffer);
-			fhp->buffer = NULL;
-		}
-		fhp->bufferSize = 0;
-		fhp->readAmt = 0;
+		if ( fhp->rwBuff )
+			free(fhp->rwBuff);
+		memset(fhp,0,sizeof(FuseFH_t));
 	}
 }
 

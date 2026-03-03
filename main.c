@@ -27,22 +27,23 @@ static void helpEm(FILE *ofp, const char *progname)
 		   "--verbose=n 'n' is bit mask of verbose modes:\n"
 		   "            May be expressed with normal C syntax [i.e. prefix 0x or 0b for hex or binary]:\n"
 		   );
-	fprintf(ofp, "    0x%04X = display some small details\n", VERBOSE_MINIMUM);
-	fprintf(ofp, "    0x%04X = display home block\n", VERBOSE_HOME);
-	fprintf(ofp, "    0x%04X = display file headers\n", VERBOSE_HEADERS);
-	fprintf(ofp, "    0x%04X = display all retrieval pointers in file headers\n", VERBOSE_RETPTRS);
-	fprintf(ofp, "    0x%04X = display attempts at file reads\n", VERBOSE_READ);
-	fprintf(ofp, "    0x%04X = display contents of index.sys file\n", VERBOSE_INDEX);
-	fprintf(ofp, "    0x%04X = display freemap primitive actions\n", VERBOSE_FREE);
-	fprintf(ofp, "    0x%04X = display contents of freemap.sys file\n", VERBOSE_FREEMAP);
-	fprintf(ofp, "    0x%04X = display and verify contents of freemap.sys file\n", VERBOSE_VERIFY_FREEMAP);
-	fprintf(ofp, "    0x%04X = display contents of rootdir.sys file\n", VERBOSE_DMPROOT);
-	fprintf(ofp, "    0x%04X = display details during unpack()\n", VERBOSE_UNPACK);
-	fprintf(ofp, "    0x%04X = display directory searches \n", VERBOSE_LOOKUP);
-	fprintf(ofp, "    0x%04X = display details during directory searches\n", VERBOSE_LOOKUP_ALL);
-	fprintf(ofp, "    0x%04X = display directory tree\n", VERBOSE_ITERATE);
-	fprintf(ofp, "    0x%04X = display anything FUSE related\n", VERBOSE_FUSE);
-	fprintf(ofp, "    0x%04X = display FUSE function calls\n", VERBOSE_FUSE_CMD);
+	fprintf(ofp, "    0x%05X = display some small details\n", VERBOSE_MINIMUM);
+	fprintf(ofp, "    0x%05X = display home block\n", VERBOSE_HOME);
+	fprintf(ofp, "    0x%05X = display file headers\n", VERBOSE_HEADERS);
+	fprintf(ofp, "    0x%05X = display all retrieval pointers in file headers\n", VERBOSE_RETPTRS);
+	fprintf(ofp, "    0x%05X = display attempts at file reads\n", VERBOSE_READ);
+	fprintf(ofp, "    0x%05X = display contents of index.sys file\n", VERBOSE_INDEX);
+	fprintf(ofp, "    0x%05X = display freemap primitive actions\n", VERBOSE_FREE);
+	fprintf(ofp, "    0x%05X = display contents of freemap.sys file\n", VERBOSE_FREEMAP);
+	fprintf(ofp, "    0x%05X = display and verify contents of freemap.sys file\n", VERBOSE_VERIFY_FREEMAP);
+	fprintf(ofp, "    0x%05X = display contents of rootdir.sys file\n", VERBOSE_DMPROOT);
+	fprintf(ofp, "    0x%05X = display details during unpack()\n", VERBOSE_UNPACK);
+	fprintf(ofp, "    0x%05X = display directory searches \n", VERBOSE_LOOKUP);
+	fprintf(ofp, "    0x%05X = display details during directory searches\n", VERBOSE_LOOKUP_ALL);
+	fprintf(ofp, "    0x%05X = display directory tree\n", VERBOSE_ITERATE);
+	fprintf(ofp, "    0x%05X = display anything FUSE related\n", VERBOSE_FUSE);
+	fprintf(ofp, "    0x%05X = display FUSE function calls\n", VERBOSE_FUSE_CMD);
+	fprintf(ofp, "    0x%05X = display anything related to file writes\n", VERBOSE_WRITES);
 	fprintf(ofp,
 			"-v           Sets verbose flag to a value of 0x001\n"
 			"-q or --quit Quit before starting fuse stuff (i.e. just read home blocks, don't mount)\n"
@@ -260,7 +261,7 @@ int main(int argc, char *argv[])
 					displayFileHeader(ourSuper.logFile, &ourSuper.indexSysHdr, 1 | (ourSuper.verbose & VERBOSE_RETPTRS));
 				ourSuper.numInodesAvailable = (ourSuper.indexSysHdr.clusters * 512) / (FSYS_MAX_ALTS * sizeof(uint32_t));
 				ourSuper.indexSys = (uint32_t *)calloc(ourSuper.indexSysHdr.clusters * 512, 1);
-				if ( readFile("index.sys", &ourSuper, (uint8_t*)ourSuper.indexSys, ourSuper.indexSysHdr.size, ourSuper.indexSysHdr.pointers[0]) < 0 )
+				if ( readWholeFile("index.sys", &ourSuper, (uint8_t*)ourSuper.indexSys, ourSuper.indexSysHdr.size, ourSuper.indexSysHdr.pointers[0]) < 0 )
 				{
 					fprintf(ourSuper.errFile,"Failed to read index.sys file\n");
 					ret = -1;
@@ -331,6 +332,7 @@ int main(int argc, char *argv[])
 								   lbas[0], lbas[1], lbas[2],
 								   inode->fsHeader.type,
 								   S_ISDIR(inode->mode) ? "DIR":"REG");
+						memcpy(inode->fhSectors,lbas,FSYS_MAX_ALTS*sizeof(uint32_t));
 						++ourSuper.numInodesUsed;
 					}
 					else
@@ -370,7 +372,7 @@ int main(int argc, char *argv[])
 					FsysRetPtr *rp;
 					ourSuper.freeMap = (FsysRetPtr *)calloc(inode->fsHeader.clusters * 512, 1);
 					ourSuper.freeMapEntriesAvail = (inode->fsHeader.clusters*512 + sizeof(FsysRetPtr) - 1) / sizeof(FsysRetPtr);
-					if ( readFile("freemap.sys", &ourSuper, (uint8_t *)ourSuper.freeMap, inode->fsHeader.size, inode->fsHeader.pointers[0]) < 0 )
+					if ( readWholeFile("freemap.sys", &ourSuper, (uint8_t *)ourSuper.freeMap, inode->fsHeader.size, inode->fsHeader.pointers[0]) < 0 )
 					{
 						fprintf(ourSuper.errFile,"Failed to read freemap.sys file\n");
 						ret = -1;

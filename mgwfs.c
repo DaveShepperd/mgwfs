@@ -23,7 +23,7 @@ void displayFileHeader(FILE *outp, FsysHeader *fhp, int retrievalsToo)
 	int alt,ii;
 	
 	fprintf(outp,  "    id:        0x%X\n"
-			       "    size:      %d\n"
+			       "    size:      %d (sizeof FsysHeader: %ld)\n"
 				   "    clusters:  %d\n"
 				   "    generation:%d\n"
 				   "    type:      %d\n"
@@ -32,6 +32,7 @@ void displayFileHeader(FILE *outp, FsysHeader *fhp, int retrievalsToo)
 				   "    mtime:     %d\n"
 			, fhp->id
 			, fhp->size
+			, sizeof(FsysHeader)
 			, fhp->clusters
 			, fhp->generation
 			, fhp->type
@@ -74,7 +75,7 @@ void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t cksum)
 		   "    id:        0x%X\n"
 		   "    hb_minor:  %d\n"
 		   "    hb_major:  %d\n"
-		   "    hb_size:   %d\n"
+		   "    hb_size:   %d (sizeof FsysHomeBlock: %ld)\n"
 		   "    fh_minor:  %d\n"
 		   "    fh_major:  %d\n"
 		   "    fh_size:   %d\n"
@@ -91,6 +92,7 @@ void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t cksum)
 		   ,homeBlkp->hb_minor
 		   ,homeBlkp->hb_major
 		   ,homeBlkp->hb_size
+		   ,sizeof(FsysHomeBlock)
 		   ,homeBlkp->fh_minor
 		   ,homeBlkp->fh_major
 		   ,homeBlkp->fh_size
@@ -345,7 +347,7 @@ int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32
 	return 1;
 }
 
-int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr)
+int readWholeFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr)
 {
 	off64_t sector;
 	int fd, ptrIdx=0, retSize=0, blkLimit;
@@ -410,8 +412,20 @@ static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *
 //	ssize_t rdSts;
 //	int fd = ourSuper->fd;
 	
-	sectors = (fhp->rwBuffSize+BYTES_PER_SECTOR-1)/BYTES_PER_SECTOR;
+	sectors = (fhp->rwBuffSize + BYTES_PER_SECTOR - 1) / BYTES_PER_SECTOR;
 	bytes = sectors*BYTES_PER_SECTOR;
+	if ( (ourSuper->verbose&VERBOSE_WRITES) )
+	{
+		fprintf(ourSuper->logFile,"%s: writeWholeFile(), rwBuff=%p, rwBuffUsed=%d, rwBuffOffset=0x%lX, rwBuffSize=%d, sectors=%d, bytes=%d\n"
+				,title
+				,fhp->rwBuff
+				,fhp->rwBuffUsed
+				,fhp->rwBuffOffset
+				,fhp->rwBuffSize
+				,sectors
+				,bytes
+				);
+	}
 	inode = ourSuper->inodeList[fhp->inode];
 	/* We only write copy 0, so free sectors used by duplicate files, if any */
 	for ( alts = 1; alts < FSYS_MAX_ALTS; ++alts )
@@ -443,6 +457,7 @@ static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *
 		ptrIdx = 0;
 		retPtr = inode->fsHeader.pointers[0] + 0;
 		inode->fsHeader.clusters = sectors;
+		inode->fsHeader.size = fhp->rwBuffUsed;
 		while ( sectors > 0 )
 		{
 			if ( ptrIdx >= FSYS_MAX_FHPTRS )
@@ -523,7 +538,7 @@ static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *
 		retSize += limit;
 #endif
 	}
-	inode->fsHeader.size = retSize;
+	inode->fsHeader.size = fhp->rwBuffUsed;
 	inode->fsHeader.mtime = time(NULL);
 	mgwfsAddToDirty(ourSuper, inode->inode_no);
 	return retSize;
@@ -543,16 +558,16 @@ int fileFlush(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 
 int fileClose(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 {
+	int sts=0;
 	if ( (fhp->openFlags&(O_RDWR|O_WRONLY)) )
 	{
-		int sts;
 		MgwfsInode_t *inode = ourSuper->inodeList[fhp->inode];
 		inode->fsHeader.mtime = time(NULL);
 		sts = writeWholeFile(title,ourSuper,fhp);
 		if ( sts >= 0 )
 			sts = 0;
 	}
-	return 0;
+	return sts;
 }
 
 int fileRename(const char *title, MgwfsSuper_t *ourSuper, const char *oldPath, const char *newPath)
@@ -566,6 +581,14 @@ int fileRename(const char *title, MgwfsSuper_t *ourSuper, const char *oldPath, c
 //		return -EIO;
 //	return 0;
 //}
+
+static void markInodeUnused(MgwfsSuper_t *ourSuper, MgwfsInode_t **inode)
+{
+	int idx = (*inode)->inode_no;
+	free(*inode);
+	ourSuper->inodeList[idx] = NULL;
+	*inode = NULL;
+}
 
 MgwfsInode_t *findUnusedInode(MgwfsSuper_t *ourSuper)
 {
@@ -606,6 +629,7 @@ MgwfsInode_t *findUnusedInode(MgwfsSuper_t *ourSuper)
 	inode->fsHeader.ctime = time(NULL);
 	inode->fsHeader.id = FSYS_ID_HEADER;
 	ourSuper->inodeList[idx] = inode;
+	ourSuper->indexSysDirty = 1;
 	return inode;
 }
 
@@ -664,72 +688,100 @@ int fileExtend(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 	return 0;
 }
 
-static void insertIntoDir(MgwfsSuper_t *ourSuper, uint32_t dirTop , MgwfsInode_t *fileInode)
+static int insertIntoDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *dirInode, MgwfsInode_t *fileInode)
 {
-	MgwfsInode_t *dirInode;
 	MgwfsInode_t *inode;
-	uint32_t idx;
+	int idx;
 	
-	dirInode = ourSuper->inodeList[dirTop];
-	if ( dirInode && (idx=dirInode->idxChildTop) )
+	fileInode->idxChildTop = 0;
+	fileInode->idxParentInode = dirInode->inode_no;
+	fileInode->idxPrevInode = 0;
+	idx = dirInode->idxChildTop;
+	fileInode->idxNextInode = idx;
+	if ( idx )
 	{
-		while ( idx )
-		{
-			int cmp;
-			
-			inode = ourSuper->inodeList[idx];
-			if ( !inode )
-				return;
-			if ( strcmp(inode->fileName, ".") && strcmp(inode->fileName, "..") )
-			{
-				cmp = strcmp(fileInode->fileName, inode->fileName);
-				if ( cmp < 0 )
-				{
-					MgwfsInode_t *prev = ourSuper->inodeList[inode->idxPrevInode];
-					prev->idxNextInode = fileInode->inode_no;
-					inode->idxPrevInode = fileInode->inode_no;
-					fileInode->idxPrevInode = prev->inode_no;
-					fileInode->idxNextInode = inode->idxNextInode;
-					fileInode->idxParentInode = dirTop;
-					return;
-				}
-			}
-			idx = inode->idxNextInode;
-		}
+		inode = ourSuper->inodeList[idx];
+		if ( inode )
+			inode->idxPrevInode = fileInode->inode_no;
 	}
+	dirInode->idxChildTop = fileInode->inode_no;
+	return 0;
 }
 
 int fileCreate(const char *title, const char *path,  MgwfsSuper_t *ourSuper)
 {
-	int sLen;
-	uint32_t idx;
-	MgwfsInode_t *inode;
+	int sts, sLen;
+	MgwfsInode_t *dirInode, *inode;
 	char *dir;
-	char *tmpDir;
+	char *tmpDir=NULL;
+	const char  *nameOnly;
 	
-	if ( (ourSuper->verbose&(VERBOSE_FUSE|VERBOSE_FUSE_CMD)) )
-		fprintf(ourSuper->logFile, "%s: fileCreate() path='%s'\n", title, path);
 	inode = findUnusedInode(ourSuper);
 	if ( !inode )
 	{
-		fprintf(ourSuper->logFile, "%s: fileCreate() for '%s' failed to find empty inode, returned ENOSPC\n", title, path);
+		fprintf(ourSuper->logFile, "%s: fileCreate(%s) failed to find empty inode, returned ENOSPC\n", title, path);
 		return -ENOSPC;
 	}
-	if ( *path == '/' )
-		++path;
-	sLen = strlen(path)+1;
+	sLen = strlen(path)+2;
 	tmpDir = (char *)malloc(sLen);
 	strncpy(tmpDir,path,sLen);
-	dir = strrchr(tmpDir,'/');
-	if ( dir )
-		*dir = 0;
+	nameOnly = strrchr(path,'/');
+	if ( !nameOnly )
+		nameOnly = path;
 	else
-		dir = tmpDir;
-	idx = findInode(ourSuper, FSYS_INDEX_ROOT, tmpDir);
-	insertIntoDir(ourSuper,idx,inode);
+		++path;
+	strncpy(inode->fileName,path,sizeof(inode->fileName));
+	dir = strrchr(tmpDir, '/');
+	if ( !dir || dir == tmpDir )
+	{
+		tmpDir[0] = '/';
+		tmpDir[1] = 0;
+	}
+	else 
+		*dir = 0;
+	dirInode = NULL;
+	sts = findInode(ourSuper, FSYS_INDEX_ROOT, tmpDir);
+	if ( sts > 0 )
+	{
+		dirInode = ourSuper->inodeList[sts];
+		if ( !dirInode )
+			sts = -ENOTDIR;
+		else
+			sts = 0;
+	}
+	else
+		sts = -ENOTDIR;
+	if ( dirInode && S_ISDIR(dirInode->mode) )
+	{
+//		fprintf(ourSuper->logFile,"Before insert:\n");
+//		tree(ourSuper, FSYS_INDEX_ROOT, 0 );
+		sts = insertIntoDir(ourSuper, dirInode, inode);
+//		fprintf(ourSuper->logFile,"After insert:\n");
+//		tree(ourSuper, FSYS_INDEX_ROOT, 0 );
+	}
+	if ( sts )
+	{
+		fprintf(ourSuper->logFile,"%s: fileCreate('%s') call to insertIntoDir() returned error %d\n", title, path, sts);
+		markInodeUnused(ourSuper,&inode);
+	}
+	else
+	{
+		sts = inode->inode_no;
+	}
 	fflush(ourSuper->logFile);
 	free(tmpDir);
-	return 0;
+	if ( (ourSuper->verbose&(VERBOSE_WRITES)) )
+	{
+		fprintf(ourSuper->logFile, "%s: fileCreate(%s). Added %d, dirInode=%d, idxChildTop=%d, returned sts=%d\n"
+				,title
+				,path
+				,inode ? inode->inode_no : 0
+				,dirInode ? dirInode->inode_no : 0
+				,dirInode ? dirInode->idxChildTop : 0
+				,sts
+				);
+	}
+	return sts;
 }
 
 int fileWrite(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp, off_t offset, size_t bytes)
@@ -1040,7 +1092,7 @@ int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 		return -1;
 	}
 	/* Fill the buffer with the file contents */
-	if ( readFile(inode->fileName, ourSuper, dirContents, inode->fsHeader.size, inode->fsHeader.pointers[0] ) < 0 )
+	if ( readWholeFile(inode->fileName, ourSuper, dirContents, inode->fsHeader.size, inode->fsHeader.pointers[0] ) < 0 )
 	{
 		fprintf(ourSuper->logFile, "%sFailed to read directory file '%s' at inode 0x%04X\n", ErrTitle, inode->fileName, inode->inode_no);
 		free(dirContents);
@@ -1183,9 +1235,26 @@ int tree(MgwfsSuper_t *ourSuper, int topIdx, int nest)
 		fprintf(stderr,"tree(): Called with topIdx %d pointing to null inode, nest=%d\n", topIdx, nest);
 		return -1;
 	}
+	if ( nest >= 20 )
+	{
+		fprintf(stderr,"tree(): Called with topIdx of %d and nest of %d too deep\n", topIdx, nest);
+		return -1;
+	}
+	if ( !nest )
+		fprintf(ourSuper->logFile, " Num Nxt Prv Chd\n");
 	do
 	{
-		fprintf(ourSuper->logFile, "%4d%4d%*s%s%s\n", inode->inode_no, inode->idxPrevInode, nest, " ", inode->fileName, S_ISDIR(inode->mode) ? "/" : "");
+		fprintf(ourSuper->logFile
+				,"%4d%4d%4d%4d%*s%s%s\n"
+				,inode->inode_no
+				,inode->idxNextInode
+				,inode->idxPrevInode
+				, inode->idxChildTop
+				,nest
+				," "
+				,inode->fileName
+				,S_ISDIR(inode->mode) ? "/" : ""
+				);
 		if ( inode->idxChildTop )
 		{
 			ret = tree(ourSuper, inode->idxChildTop, nest+2 );

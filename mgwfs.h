@@ -32,12 +32,13 @@ typedef uint32_t sector_t;
 
 typedef struct MgwfsInode_t
 {
-	int idxParentInode;				/* Index to parent directory's inode */
-	int idxNextInode;				/* Index to next inode in this directory */
-	int idxPrevInode;				/* Index to previous inode in this directory */
+	int idxParentInode;				/* Index to parent directory's inode (i.e. super->inodeList[xx]) */
+	int idxNextInode;				/* Index to next inode in this directory (i.e. super->inodeList[xx]) */
+	int idxPrevInode;				/* Index to previous inode in this directory (i.e. super->inodeList[xx]) */
 	int idxChildTop;				/* Index to list of inodes if this is a directory */
 	int numInodes;					/* number of inodes in this directory */
 	uint32_t inode_no;				/* file's local ID (relative to indexSys) */
+	uint32_t fhSectors[FSYS_MAX_ALTS]; /* on disk sector ID's to copies of FH (from index.sys) */
 	mode_t mode;					/* file's mode */
 	int fnLen;						/* Filename length */
 	FsysHeader fsHeader;			/* File's header */
@@ -206,7 +207,7 @@ extern void displayFileHeader(FILE *outp, FsysHeader *fhp, int retrievalsToo);
 extern void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t cksum);
 extern int getHomeBlock(MgwfsSuper_t *ourSuper, off64_t maxHb, off64_t sizeInSectors, uint32_t *ckSumP);
 extern int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp);
-extern int readFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr);
+extern int readWholeFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr);
 //extern int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern int flushFile(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern void dumpIndex(FILE *outp, uint32_t *indexBase, int bytes);

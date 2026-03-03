@@ -1,0 +1,33 @@
+Just so I remember what's going on (a sort of theory of operation):
+
+When a file is opened for read or read/write, it is read in its
+entirety into a malloc()'d buffer. The lseek() function just positions
+an index into the buffer. If the file is extended beyond the size of
+the buffer, the buffer is realloc()'d as necessary. When a file opened
+for read is closed, the buffer is simply free()'d. When a file is opened
+for write or read/write then subsequently closed, it is written back to
+disk (may need a new or altered set of retrieval pointers) along with
+its file header, the freemap.sys (if changed) and index.sys (if changed).
+The buffer and its associated inode are simply free()'d.
+
+At mount time the 3 home blocks are found and read and compared. One good
+copy is maintained in MgwfsSuper_t ptr->homeBlock. index.sys file is read. Pointers to which can be found
+in the home block. all file headers (FH's) are read into a malloc()'d buffer
+(MgwfsSuper_t ptr->indexSys)
+
+Things that need be done to affect a file write:
+- Record the instance of inode that changed.
+- Alter the contents of the inode's file header as appropriate.
+- Verify the file will fit within the existing retrieval pointers (RP's)
+  and if not, free the existing RP's and allocate new ones.
+- Walk the list of changed inodes and write the file headers (FH) for
+  each using the saved FH lba pointers.
+- Write the file contents according to the RP's.
+- If the file changed the contents of the index file,
+  write the contents of the index.sys file.
+- If the freemap changed as a result of any RP changes, record
+  the instance of the freemap inode change (rinse and repeat).
+
+Things that need be done to affect a directory change:
+
+

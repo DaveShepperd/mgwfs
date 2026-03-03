@@ -269,6 +269,7 @@
 			Filters="*.h;*.H;*.hh;*.hpp;*.hxx;*.h++;*.inc;*.sh;*.cpy;*.if"
 			GUID="{E0B97497-F35E-4448-9094-D8BC9DF607DC}">
 			<F N="agcfsys.h"/>
+			<F N="alt_agcfsys.h"/>
 			<F N="mgwfs.h"/>
 			<F N="walk.sh"/>
 		</Folder>
@@ -287,6 +288,7 @@
 			<F
 				N="Makefile"
 				Type="Makefile"/>
+			<F N="theory-of-op.txt"/>
 		</Folder>
 	</Files>
 	<List Name="RTE">

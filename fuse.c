@@ -77,7 +77,10 @@ static int mgwfs_getattr(const char *path, struct stat *stbuf,
 		else
 			ret = -ENOENT;
 		if ( ret < 0 )
+		{
 			fprintf(ourSuper.logFile, "FUSE mgwfs_getattr() returned -ENOENT because '%s' could not be found\n", path);
+			fflush(ourSuper.logFile);
+		}
 	}
 	if ( !ret )
 	{
@@ -251,13 +254,11 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 		fhp->openFlags = fi->flags;
 		fi->fh = fhp->index;
 		retVal = 0;
-		if ((ourSuper.verbose&VERBOSE_FUSE_CMD))
-			fprintf(ourSuper.logFile, "FUSE mgwfs_open(%s) returned success on open, inode %d and FHidx %d, flags=0x%X\n", path, idx, fhp->index, fhp->openFlags);
 		retVal = fileOpen("FUSE mgwfs_open()", path, &ourSuper, fhp);
 		fhp->rwBuffSize = inode->fsHeader.clusters*BYTES_PER_SECTOR;
 		fhp->rwBuff = (uint8_t *)malloc(fhp->rwBuffSize);
 		/* Read the whole file into a local buffer */
-		fhp->rwBuffErr = readFile("FUSE mgwfs_open():", &ourSuper, fhp->rwBuff, inode->fsHeader.size, inode->fsHeader.pointers[0]);
+		fhp->rwBuffErr = readWholeFile("FUSE mgwfs_open():", &ourSuper, fhp->rwBuff, inode->fsHeader.size, inode->fsHeader.pointers[0]);
 		if ( fhp->rwBuffErr >= 0 )
 		{
 			fhp->rwBuffUsed = fhp->rwBuffErr;
@@ -267,6 +268,19 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 					fhp->rwBuffUsed = 0;
 				if ( (fi->flags & O_APPEND) )
 					fhp->rwBuffOffset = fhp->rwBuffUsed;
+			}
+			if ((ourSuper.verbose&VERBOSE_FUSE_CMD))
+			{
+				fprintf(ourSuper.logFile, "FUSE mgwfs_open(%s,0x%X) returned success on open, inode %d and FHidx %d, rwBuff=%p, rwBuffUsed=%d, rwBuffOffset=%ld, rwBuffSize=%d\n"
+						,path
+						,fhp->openFlags
+						,idx
+						,fhp->index
+						,fhp->rwBuff
+						,fhp->rwBuffUsed
+						,fhp->rwBuffOffset
+						,fhp->rwBuffSize
+						 );
 			}
 		}
 		else
@@ -428,7 +442,7 @@ static int mgwfs_read(const char *path, char *buf, size_t size, off_t offset,
 		}
 		if ( (ourSuper.verbose & VERBOSE_FUSE_CMD) )
 		{
-			fprintf(ourSuper.logFile, "FUSE mgwfs_read('%s', %ld, 0x%lX): fhp->rwBuffUsed=%d, wrBuffOffset=%ld, reBuffSize=%d, rwBuffErr=%d\n"
+			fprintf(ourSuper.logFile, "FUSE mgwfs_read('%s', %ld, 0x%lX): fhp->rwBuffUsed=%d, rwBuffOffset=%ld, rwBuffSize=%d, rwBuffErr=%d\n"
 					,path
 					,size
 					,offset
@@ -696,11 +710,13 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 	FuseFH_t *fhp=NULL;
 	int cpyAmt= -EIO;
 	
+#if 0
 	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 	{
-		fprintf(ourSuper.logFile, "FUSE mgwfs_write('%s',%p,%ld,0x%lX,%ld\n", path, buf, size, offset, fi->fh );
+		fprintf(ourSuper.logFile, "FUSE mgwfs_write('%s',%p,%ld,0x%lX,%ld)\n", path, buf, size, offset, fi->fh );
 		fflush(ourSuper.logFile);
 	}
+#endif
 	do
 	{
 		pthread_mutex_lock(&ourSuper.ourMutex);
@@ -721,12 +737,13 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 		}
 		if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 		{
-			fprintf(ourSuper.logFile, "FUSE mgwfs_write('%s',%p,%ld,0x%lX,%ld): rwBuffUsed=%d, rwBuffOffset=%ld, rwBuffSize=%d\n"
+			fprintf(ourSuper.logFile, "FUSE mgwfs_write('%s',%p,%ld,0x%lX,%ld): Before: rwBuff=%p, rwBuffUsed=%d, rwBuffOffset=%ld, rwBuffSize=%d\n"
 					,path
 					,buf
 					,size
 					,offset
 					,fi->fh
+					,fhp->rwBuff
 					,fhp->rwBuffUsed
 					,fhp->rwBuffOffset
 					,fhp->rwBuffSize
@@ -743,9 +760,41 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 		}
 		cpyAmt = size;
 		memcpy(fhp->rwBuff + fhp->rwBuffOffset, buf, cpyAmt);
+		if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_WRITES)) )
+		{
+			int idx, bcnt = cpyAmt;
+			if ( bcnt > 5 )
+				bcnt = 5;
+			fprintf(ourSuper.logFile, "FUSE mgwfs_write('%s'): added (%d bytes)"
+					,path
+					,cpyAmt
+					);
+			for (idx=0; idx < bcnt; ++idx)
+				fprintf(ourSuper.logFile, " %02X", buf[idx]);
+			fprintf(ourSuper.logFile,"%s at offset %ld\n"
+					,bcnt != cpyAmt ? "..." : ""
+					,fhp->rwBuffOffset
+					);
+			fflush(ourSuper.logFile);
+		}
 		fhp->rwBuffOffset += cpyAmt;
 		if ( fhp->rwBuffOffset > fhp->rwBuffUsed )
 			fhp->rwBuffUsed = fhp->rwBuffOffset;
+		if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+		{
+			fprintf(ourSuper.logFile, "FUSE mgwfs_write('%s',%p,%ld,0x%lX,%ld): After:  rwBuff=%p, rwBuffUsed=%d, rwBuffOffset=%ld, rwBuffSize=%d\n"
+					,path
+					,buf
+					,size
+					,offset
+					,fi->fh
+					,fhp->rwBuff
+					,fhp->rwBuffUsed
+					,fhp->rwBuffOffset
+					,fhp->rwBuffSize
+					);
+			fflush(ourSuper.logFile);
+		}
 	} while (0);
 	pthread_mutex_unlock(&ourSuper.ourMutex);
 	fflush(ourSuper.logFile);
@@ -754,15 +803,36 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 
 static int mgwfs_flush(const char *path, struct fuse_file_info *fi)
 {
-	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+	FuseFH_t *fhp;
+	int sts;
+	
+	if ( !fi->fh )
 	{
-		fprintf(ourSuper.logFile, "FUSE mgwfs_flush(path='%s', fi->fh=%ld. returned %s\n",
-				path, fi->fh, options.read_write ? "-EIO":"0" );
-		fflush(ourSuper.logFile);
+		fprintf(ourSuper.logFile, "FUSE mgwfs_flush('%s',%ld) returned -EPERM because has not been open()'d\n", path, fi->fh);
+		return -EPERM;
 	}
-	if (!options.read_write)
-		return 0;
-	return -EIO;
+	pthread_mutex_lock(&ourSuper.ourMutex);
+	fhp = getFuseFHidx(&ourSuper,fi->fh);
+	if ( fhp )
+	{
+		sts = fileFlush("mgwfs_flush()", &ourSuper, fhp);
+		if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+		{
+			fprintf(ourSuper.logFile, "FUSE mgwfs_flush('%s',%ld): rwBuff=%p, rwBuffUsed=%d, rwBuffOffset=%ld, rwBuffSize=%d\n"
+					,path
+					,fi->fh
+					,fhp->rwBuff
+					,fhp->rwBuffUsed
+					,fhp->rwBuffOffset
+					,fhp->rwBuffSize
+					);
+			fflush(ourSuper.logFile);
+		}
+	}
+	else
+		sts = -EIO;
+	pthread_mutex_unlock(&ourSuper.ourMutex);
+	return sts;
 }
 
 static int mgwfs_fsync(const char *path, int arg, struct fuse_file_info *fi)
@@ -790,22 +860,56 @@ static void mgwfs_destroy(void *private_data)
 //RENAME_EXCHANGE is set, both files must exist, and they are swapped
 static int mgwfs_rename (const char *oldName, const char *newName, unsigned int flags)
 {
-	return -EEXIST;
+	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+	{
+		fprintf(ourSuper.logFile, "FUSE mgwfs_rename('%s','%s',0x%X)\n", oldName, newName, flags );
+		fflush(ourSuper.logFile);
+	}
+	return options.read_write ? -EPERM : -EEXIST;
 }
 
-static int mgwfs_mkdir(const char *path, mode_t)
+static int mgwfs_mkdir(const char *path, mode_t mode)
 {
-	return -EIO;
+	int sts = options.read_write ? -EPERM : -EIO;
+	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+	{
+		fprintf(ourSuper.logFile, "FUSE mgwfs_mkdir('%s',0x%X), sts=%d\n", path, mode, sts);
+		fflush(ourSuper.logFile);
+	}
+	return sts;
 }
 
 static int mgwfs_rmdir(const char *path)
 {
-	return -EIO;
+	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+	{
+		fprintf(ourSuper.logFile, "FUSE mgwfs_rmdir('%s')\n", path);
+		fflush(ourSuper.logFile);
+	}
+	return options.read_write ? -EPERM : -EIO;
 }
 
 static int mgwfs_create(const char *path, mode_t fMode, struct fuse_file_info *fi)
 {
-	return -EIO;
+	int idx, sts=0;
+	idx = fileCreate("mgwfs_open()", path, &ourSuper);
+	if ( idx < 0 )
+		sts = idx;
+	else
+	{
+		FuseFH_t *fhp;
+		fhp = getFuseFHidx(&ourSuper, 0);
+		++fhp->instances;
+		fhp->inode = idx;
+		fhp->openFlags = fi->flags;
+		fi->fh = fhp->index;
+	}
+	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+	{
+		fprintf(ourSuper.logFile, "FUSE mgwfs_create('%s',0x%X,%ld), idx=%d, sts=%d\n", path, fMode, fi->fh, idx, sts);
+		fflush(ourSuper.logFile);
+	}
+	return sts;
 }
 
 static off_t moveOffset(const char *path, FuseFH_t *fhp, off_t off)
@@ -892,14 +996,14 @@ static off_t mgwfs_lseek(const char *path, off_t off, int whence, struct fuse_fi
 
 static int mgwfs_truncate(const char *path, off_t offset, struct fuse_file_info *fi)
 {
-	int sts = -EIO;
+	int sts = options.read_write ? -EPERM : -EIO;
 
 	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 	{
-		fprintf(ourSuper.logFile, "FUSE mgwfs_lseek(%s,0x%lX,%ld)\n", path, offset, fi->fh );
+		fprintf(ourSuper.logFile, "FUSE mgwfs_truncate(%s,0x%lX,%ld)\n", path, offset, fi->fh );
 		fflush(ourSuper.logFile);
 	}
-	if ( fi->fh )
+	if ( options.read_write && fi->fh )
 	{
 		FuseFH_t *fhp;
 		
@@ -907,7 +1011,7 @@ static int mgwfs_truncate(const char *path, off_t offset, struct fuse_file_info 
 		fhp = getFuseFHidx(&ourSuper, fi->fh);
 		if ( (fhp->openFlags & (O_RDWR|O_WRONLY)) )
 		{
-			sts = lseek_locked(path,offset,SEEK_SET,fi);
+			sts = moveOffset(path,fhp,offset);
 			if ( sts >= 0 )
 			{
 				fhp->rwBuffUsed = offset;

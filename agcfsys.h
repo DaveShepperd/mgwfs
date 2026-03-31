@@ -456,8 +456,6 @@ typedef struct home_block {
     uint32_t journal[FSYS_MAX_ALTS]; /* ptrs to the journal fileheader (added with version 1.7) */
 } FsysHomeBlock;
 
-#include "alt_agcfsys.h"
-
 /* Description of retrieval pointer */
 
 typedef struct file_retptr {

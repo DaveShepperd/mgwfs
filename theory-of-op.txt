@@ -1,11 +1,15 @@
 Just so I remember what's going on (a sort of theory of operation):
 
+NOTE: Absolutely no effort was used to make this project have either
+optimum performance or be miserly with memory. In fact, it is probably
+as bad as it could be. But so what?
+
 When a file is opened for read or read/write, it is read in its
 entirety into a malloc()'d buffer. The lseek() function just positions
 an index into the buffer. If the file is extended beyond the size of
 the buffer, the buffer is realloc()'d as necessary. When a file opened
 for read is closed, the buffer is simply free()'d. When a file is opened
-for write or read/write then subsequently closed, it is written back to
+for write or read+write then subsequently closed, it is written back to
 disk (may need a new or altered set of retrieval pointers) along with
 its file header, the freemap.sys (if changed) and index.sys (if changed).
 The buffer and its associated inode are simply free()'d.

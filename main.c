@@ -246,8 +246,8 @@ int main(int argc, char *argv[])
 			}
 			if ( !ourSuper.homeBlk.max_lba )
 				ourSuper.homeBlk.max_lba = sizeInSectors;
-			ourSuper.sectorsFree = ourSuper.homeBlk.max_lba - 1 - FSYS_MAX_ALTS;
-			ourSuper.sectorsUsed = FSYS_MAX_ALTS;
+			ourSuper.freeMap.sectorsFree = ourSuper.homeBlk.max_lba - 1 - FSYS_MAX_ALTS;
+			ourSuper.freeMap.sectorsUsed = FSYS_MAX_ALTS;
 			if ( (ourSuper.verbose&VERBOSE_HOME) )
 			{
 				fprintf(ourSuper.logFile,"Found home blocks at sectors 0x%08X, 0x%08X, 0x%08X\n",
@@ -369,18 +369,19 @@ int main(int argc, char *argv[])
 				if ( ii == FSYS_INDEX_FREE )
 				{
 					int jj;
+					FreeMap_t *freeMap = &ourSuper.freeMap;
 					FsysRetPtr *rp;
-					ourSuper.freeMap = (FsysRetPtr *)calloc(inode->fsHeader.clusters * 512, 1);
-					ourSuper.freeMapEntriesAvail = (inode->fsHeader.clusters*512 + sizeof(FsysRetPtr) - 1) / sizeof(FsysRetPtr);
-					if ( readWholeFile("freemap.sys", &ourSuper, (uint8_t *)ourSuper.freeMap, inode->fsHeader.size, inode->fsHeader.pointers[0]) < 0 )
+					freeMap->rwBuff.buff = (uint8_t *)calloc(inode->fsHeader.clusters, 512);
+					freeMap->freeMapEntriesAvail = (inode->fsHeader.clusters*512 + sizeof(FsysRetPtr) - 1) / sizeof(FsysRetPtr);
+					if ( readWholeFile("freemap.sys", &ourSuper, freeMap->rwBuff.buff, inode->fsHeader.size, inode->fsHeader.pointers[0]) < 0 )
 					{
 						fprintf(ourSuper.errFile,"Failed to read freemap.sys file\n");
 						ret = -1;
 						break;
 					}
-					rp = ourSuper.freeMap;
-					for ( jj = 0; rp->nblocks && jj < ourSuper.freeMapEntriesAvail; ++jj, ++rp )
-						++ourSuper.freeMapEntriesUsed;
+					rp = (FsysRetPtr *)freeMap->rwBuff.buff;
+					for ( jj = 0; rp->nblocks && jj < freeMap->freeMapEntriesAvail; ++jj, ++rp )
+						++freeMap->freeMapEntriesUsed;
 					if ( (ourSuper.verbose & (VERBOSE_FREEMAP | VERBOSE_VERIFY_FREEMAP)) )
 					{
 						if ( (ourSuper.verbose & VERBOSE_VERIFY_FREEMAP) )
@@ -435,5 +436,6 @@ int main(int argc, char *argv[])
 		free(ourSuper.inodeList);
 	}
 	pthread_mutex_destroy(&ourSuper.ourMutex);
+	pthread_mutex_destroy(&ourSuper.dirtyStuffMutex);
 	return ret;
 }

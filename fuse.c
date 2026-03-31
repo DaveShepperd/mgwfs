@@ -12,32 +12,18 @@
 
 #include "mgwfs.h"
 
+#if 0
 static void clearDirty(MgwfsSuper_t *super)
 {
 	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 	{
-		fprintf(ourSuper.logFile, "FUSE mgwfs clearDirty(). Would have written back to disk %d inodes\n", super->numDirtyInodes);
+		fprintf(ourSuper.logFile, "FUSE clearDirty(). Writing back to disk %d inodes\n", super->numDirtyInodes);
 		fflush(ourSuper.logFile);
 	}
+	updateAllMetaData("FUSE clearDirty()",ourSuper);
 	super->numDirtyInodes = 0;
 }
-
-void mgwfsAddToDirty(MgwfsSuper_t *super, int idx)
-{
-	if ( idx )
-	{
-		if ( super->numDirtyInodes >= MAX_DIRTY_INODE )
-			clearDirty(super);
-		super->dirtyInodes[super->numDirtyInodes] = idx;
-		if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
-		{
-			fprintf(ourSuper.logFile, "FUSE mgwfsAddToDirty(). Added inode %d to dirtyInode[%d]\n",
-					idx, super->numDirtyInodes);
-			fflush(ourSuper.logFile);
-		}
-		++super->numDirtyInodes;
-	}
-}
+#endif
 
 static void *mgwfs_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
 {
@@ -255,19 +241,19 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 		fi->fh = fhp->index;
 		retVal = 0;
 		retVal = fileOpen("FUSE mgwfs_open()", path, &ourSuper, fhp);
-		fhp->rwBuffSize = inode->fsHeader.clusters*BYTES_PER_SECTOR;
-		fhp->rwBuff = (uint8_t *)malloc(fhp->rwBuffSize);
+		fhp->rwb.buffSize = inode->fsHeader.clusters*BYTES_PER_SECTOR;
+		fhp->rwb.buff = (uint8_t *)malloc(fhp->rwb.buffSize);
 		/* Read the whole file into a local buffer */
-		fhp->rwBuffErr = readWholeFile("FUSE mgwfs_open():", &ourSuper, fhp->rwBuff, inode->fsHeader.size, inode->fsHeader.pointers[0]);
-		if ( fhp->rwBuffErr >= 0 )
+		fhp->rwb.buffErr = readWholeFile("FUSE mgwfs_open():", &ourSuper, fhp->rwb.buff, inode->fsHeader.size, inode->fsHeader.pointers[0]);
+		if ( fhp->rwb.buffErr >= 0 )
 		{
-			fhp->rwBuffUsed = fhp->rwBuffErr;
+			fhp->rwb.buffUsed = fhp->rwb.buffErr;
 			if ( (fi->flags&(O_WRONLY|O_RDWR)) )
 			{
 				if ( (fi->flags & O_TRUNC) )
-					fhp->rwBuffUsed = 0;
+					fhp->rwb.buffUsed = 0;
 				if ( (fi->flags & O_APPEND) )
-					fhp->rwBuffOffset = fhp->rwBuffUsed;
+					fhp->rwb.buffOffset = fhp->rwb.buffUsed;
 			}
 			if ((ourSuper.verbose&VERBOSE_FUSE_CMD))
 			{
@@ -276,16 +262,16 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 						,fhp->openFlags
 						,idx
 						,fhp->index
-						,fhp->rwBuff
-						,fhp->rwBuffUsed
-						,fhp->rwBuffOffset
-						,fhp->rwBuffSize
+						,fhp->rwb.buff
+						,fhp->rwb.buffUsed
+						,fhp->rwb.buffOffset
+						,fhp->rwb.buffSize
 						 );
 			}
 		}
 		else
 		{
-			fprintf(ourSuper.logFile, "FUSE mgwfs_open('%s') readFile() returned error %d.\n", path, fhp->rwBuffErr );
+			fprintf(ourSuper.logFile, "FUSE mgwfs_open('%s') readFile() returned error %d.\n", path, fhp->rwb.buffErr );
 		}
 	} while (0);
 	fflush(ourSuper.logFile);
@@ -419,15 +405,15 @@ static int mgwfs_read(const char *path, char *buf, size_t size, off_t offset,
 					);
 			break;
 		}
-		if ( fhp->rwBuffErr < 0 )
+		if ( fhp->rwb.buffErr < 0 )
 		{
 			fprintf(ourSuper.logFile, "FUSE mgwfs_read('%s', %ld, 0x%lX): Found rwBuffErr=%d\n"
 					,path
 					,size
 					,offset
-					,fhp->rwBuffErr
+					,fhp->rwb.buffErr
 					);
-			retVal = fhp->rwBuffErr;
+			retVal = fhp->rwb.buffErr;
 			break;
 		}
 		inode = ourSuper.inodeList[fhp->inode];
@@ -446,22 +432,22 @@ static int mgwfs_read(const char *path, char *buf, size_t size, off_t offset,
 					,path
 					,size
 					,offset
-					,fhp->rwBuffUsed
-					,fhp->rwBuffOffset
-					,fhp->rwBuffSize
-					,fhp->rwBuffErr
+					,fhp->rwb.buffUsed
+					,fhp->rwb.buffOffset
+					,fhp->rwb.buffSize
+					,fhp->rwb.buffErr
 					);
 			fflush(ourSuper.logFile);
 		}
 		cpyAmt = 0;
-		if ( fhp->rwBuffUsed > 0 )
+		if ( fhp->rwb.buffUsed > 0 )
 		{
 			off_t adjOffset = offset;
 			cpyAmt = size;
-			if ( adjOffset > fhp->rwBuffUsed )
-				adjOffset = fhp->rwBuffUsed;
-			if ( cpyAmt + adjOffset > fhp->rwBuffUsed )
-				cpyAmt = fhp->rwBuffUsed-adjOffset;
+			if ( adjOffset > fhp->rwb.buffUsed )
+				adjOffset = fhp->rwb.buffUsed;
+			if ( cpyAmt + adjOffset > fhp->rwb.buffUsed )
+				cpyAmt = fhp->rwb.buffUsed-adjOffset;
 			if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 			{
 				fprintf(ourSuper.logFile, "FUSE mgwfs_read('%s', %ld, 0x%lX) cpyAmt=%ld, adjOffset=%ld, rwBuffUsed=%d\n",
@@ -470,12 +456,12 @@ static int mgwfs_read(const char *path, char *buf, size_t size, off_t offset,
 						offset,
 						cpyAmt,
 						adjOffset,
-						fhp->rwBuffUsed );
+						fhp->rwb.buffUsed );
 			}
 			if ( cpyAmt > 0 )
 			{
-				memcpy(buf, fhp->rwBuff + adjOffset, cpyAmt);
-				fhp->rwBuffOffset += cpyAmt;
+				memcpy(buf, fhp->rwb.buff + adjOffset, cpyAmt);
+				fhp->rwb.buffOffset += cpyAmt;
 			}
 		}
 		retVal = cpyAmt;
@@ -517,6 +503,7 @@ static int mgwfs_release(const char *path, struct fuse_file_info *fi)
 static int mgwfs_statfs(const char *path, struct statvfs *stp)
 {
 	FsysRetPtr *rp;
+	FreeMap_t *freeMap = &ourSuper.freeMap;
 	
 	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 	{
@@ -527,8 +514,8 @@ static int mgwfs_statfs(const char *path, struct statvfs *stp)
 	stp->f_type = ANON_INODE_FS_MAGIC;
 	stp->f_bsize = BLOCK_SIZE; //BYTES_PER_SECTOR;
 	stp->f_blocks = (ourSuper.homeBlk.max_lba*BYTES_PER_SECTOR)/BLOCK_SIZE;
-	rp = ourSuper.freeMap;
-	while ( rp && rp < ourSuper.freeMap + ourSuper.freeMapEntriesAvail && rp->nblocks )
+	rp = (FsysRetPtr *)freeMap->rwBuff.buff;
+	while ( rp && rp < (FsysRetPtr *)freeMap->rwBuff.buff + freeMap->freeMapEntriesAvail && rp->nblocks )
 	{
 		stp->f_bfree += rp->nblocks;
 		++rp;
@@ -600,7 +587,7 @@ static int mgwfs_unlink(const char *path)
 		parent = NULL;
 		prev = NULL;
 		next = NULL;
-		mgwfsAddToDirty(super,curr->idxParentInode);
+		addToDirty(super,curr->idxParentInode);
 		/* Get pointer to previous inode if there is one */
 		if ( curr->idxPrevInode )
 			prev = super->inodeList[curr->idxPrevInode];
@@ -654,7 +641,7 @@ static int mgwfs_unlink(const char *path)
 				indexPtr[ii] = FSYS_EMPTYLBA_BIT;
 			}
 		}
-		super->indexSysDirty = 1;	/* index.sys is dirty now */
+		addToDirty(super,FSYS_INDEX_INDEX);
 		// Need to free the sectors assigned to this file
 		for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
 		{
@@ -683,24 +670,24 @@ static int mgwfs_unlink(const char *path)
 
 static off_t addToBuff(FuseFH_t *fhp, const char *path, off_t off)
 {
-	if ( off >= fhp->rwBuffSize )
+	if ( off >= fhp->rwb.buffSize )
 	{
 		uint8_t *newPtr;
 		int sectors = (off+BYTES_PER_SECTOR-1)/BYTES_PER_SECTOR;
 		int bytes = sectors*BYTES_PER_SECTOR;
-		newPtr = (uint8_t *)realloc(fhp->rwBuff, bytes);
+		newPtr = (uint8_t *)realloc(fhp->rwb.buff, bytes);
 		if ( !newPtr )
 		{
 			fprintf(ourSuper.logFile, "FUSE addToBuff(%s,0x%lX). Out of memory to allocate %d bytes.\n", path, off, bytes );
 			return -ENOMEM;
 		}
-		fhp->rwBuff = newPtr;
-		fhp->rwBuffSize = bytes;
-		memset(fhp->rwBuff+fhp->rwBuffUsed,0,fhp->rwBuffSize-fhp->rwBuffUsed);
+		fhp->rwb.buff = newPtr;
+		fhp->rwb.buffSize = bytes;
+		memset(fhp->rwb.buff+fhp->rwb.buffUsed,0,fhp->rwb.buffSize-fhp->rwb.buffUsed);
 	}
-	if ( off > fhp->rwBuffUsed )
-		fhp->rwBuffUsed = off;
-	fhp->rwBuffOffset = off;
+	if ( off > fhp->rwb.buffUsed )
+		fhp->rwb.buffUsed = off;
+	fhp->rwb.buffOffset = off;
 	return off;
 }
 
@@ -743,23 +730,23 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 					,size
 					,offset
 					,fi->fh
-					,fhp->rwBuff
-					,fhp->rwBuffUsed
-					,fhp->rwBuffOffset
-					,fhp->rwBuffSize
+					,fhp->rwb.buff
+					,fhp->rwb.buffUsed
+					,fhp->rwb.buffOffset
+					,fhp->rwb.buffSize
 					);
 			fflush(ourSuper.logFile);
 		}
-		if ( size + offset > fhp->rwBuffSize )
+		if ( size + offset > fhp->rwb.buffSize )
 		{
-			off_t currOffset = fhp->rwBuffOffset;
+			off_t currOffset = fhp->rwb.buffOffset;
 			cpyAmt = addToBuff(fhp,path,offset+size);
 			if ( cpyAmt < 0 )
 				break;
-			fhp->rwBuffOffset = currOffset;
+			fhp->rwb.buffOffset = currOffset;
 		}
 		cpyAmt = size;
-		memcpy(fhp->rwBuff + fhp->rwBuffOffset, buf, cpyAmt);
+		memcpy(fhp->rwb.buff + fhp->rwb.buffOffset, buf, cpyAmt);
 		if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_WRITES)) )
 		{
 			int idx, bcnt = cpyAmt;
@@ -773,13 +760,13 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 				fprintf(ourSuper.logFile, " %02X", buf[idx]);
 			fprintf(ourSuper.logFile,"%s at offset %ld\n"
 					,bcnt != cpyAmt ? "..." : ""
-					,fhp->rwBuffOffset
+					,fhp->rwb.buffOffset
 					);
 			fflush(ourSuper.logFile);
 		}
-		fhp->rwBuffOffset += cpyAmt;
-		if ( fhp->rwBuffOffset > fhp->rwBuffUsed )
-			fhp->rwBuffUsed = fhp->rwBuffOffset;
+		fhp->rwb.buffOffset += cpyAmt;
+		if ( fhp->rwb.buffOffset > fhp->rwb.buffUsed )
+			fhp->rwb.buffUsed = fhp->rwb.buffOffset;
 		if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 		{
 			fprintf(ourSuper.logFile, "FUSE mgwfs_write('%s',%p,%ld,0x%lX,%ld): After:  rwBuff=%p, rwBuffUsed=%d, rwBuffOffset=%ld, rwBuffSize=%d\n"
@@ -788,10 +775,10 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 					,size
 					,offset
 					,fi->fh
-					,fhp->rwBuff
-					,fhp->rwBuffUsed
-					,fhp->rwBuffOffset
-					,fhp->rwBuffSize
+					,fhp->rwb.buff
+					,fhp->rwb.buffUsed
+					,fhp->rwb.buffOffset
+					,fhp->rwb.buffSize
 					);
 			fflush(ourSuper.logFile);
 		}
@@ -821,10 +808,10 @@ static int mgwfs_flush(const char *path, struct fuse_file_info *fi)
 			fprintf(ourSuper.logFile, "FUSE mgwfs_flush('%s',%ld): rwBuff=%p, rwBuffUsed=%d, rwBuffOffset=%ld, rwBuffSize=%d\n"
 					,path
 					,fi->fh
-					,fhp->rwBuff
-					,fhp->rwBuffUsed
-					,fhp->rwBuffOffset
-					,fhp->rwBuffSize
+					,fhp->rwb.buff
+					,fhp->rwb.buffUsed
+					,fhp->rwb.buffOffset
+					,fhp->rwb.buffSize
 					);
 			fflush(ourSuper.logFile);
 		}
@@ -916,17 +903,17 @@ static off_t moveOffset(const char *path, FuseFH_t *fhp, off_t off)
 {
 	if ( off < 0 )
 		off = 0;
-	if ( off <= fhp->rwBuffUsed )
+	if ( off <= fhp->rwb.buffUsed )
 	{
-		fhp->rwBuffOffset = off;
+		fhp->rwb.buffOffset = off;
 		return off;
 	}
 	if ( !(fhp->openFlags & (O_RDWR | O_WRONLY)) )
 	{
 		/* read only, cannot go past EOF */
-		if ( off >= fhp->rwBuffUsed )
-			off = fhp->rwBuffUsed;
-		fhp->rwBuffOffset = off;
+		if ( off >= fhp->rwb.buffUsed )
+			off = fhp->rwb.buffUsed;
+		fhp->rwb.buffOffset = off;
 		return off;
 	}
 	/* r/w or wo, maybe add to end of file */
@@ -968,12 +955,12 @@ static off_t lseek_locked(const char *path, off_t off, int whence, struct fuse_f
 				break;
 
 			case SEEK_CUR:
-				newOff = fhp->rwBuffOffset+off;
+				newOff = fhp->rwb.buffOffset+off;
 				sts = moveOffset(path,fhp,newOff);
 				break;
 
 			case SEEK_END:
-				newOff = fhp->rwBuffUsed+off;
+				newOff = fhp->rwb.buffUsed+off;
 				sts = moveOffset(path,fhp,newOff);
 				break;
 				
@@ -1014,8 +1001,8 @@ static int mgwfs_truncate(const char *path, off_t offset, struct fuse_file_info 
 			sts = moveOffset(path,fhp,offset);
 			if ( sts >= 0 )
 			{
-				fhp->rwBuffUsed = offset;
-				fhp->rwBuffOffset = offset;
+				fhp->rwb.buffUsed = offset;
+				fhp->rwb.buffOffset = offset;
 			}
 		}
 		pthread_mutex_unlock(&ourSuper.ourMutex);

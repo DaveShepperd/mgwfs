@@ -88,46 +88,59 @@ enum
 
 typedef struct
 {
+	uint8_t *buff;
+	uint32_t buffSize;	/* Size of read/write buffer (will be multiple of sector size) */
+	off_t buffOffset;		/* Offset of last byte read from or written to rwBuff */
+	uint32_t buffUsed;	/* Total bytes used in rdBuff */
+	int buffErr;
+} RwBuff_t;
+
+typedef struct
+{
 	int index;				/* Our index into the list */
 	uint32_t inode;			/* file ID of open file */
 	int instances;			/* number of times this file is open() */
 	int openFlags;			/* flags passed in on open() */
-	uint8_t *rwBuff;		/* Pointer to read buffer */
-	uint32_t rwBuffSize;	/* Size of read buffer (will be multiple of sector size) */
-	off_t rwBuffOffset;		/* Offset of last byte read from rdBuff */
-	uint32_t rwBuffUsed;	/* Total bytes used in rdBuff */
-	int rwBuffErr;
+	RwBuff_t rwb;
 } FuseFH_t;
 
 #define MAX_DIRTY_INODE 100
 
-typedef struct MgwfsSuper_t
+typedef struct
 {
-	/* Not sure if a mutex is needed, but just to be safe we use one to force single threading */
-	pthread_mutex_t ourMutex;
-	int fd;					/* fd of image file */
-	const char *imageName;	/* path to our image */
-	uint32_t verbose;		/* verbose flags */
-	int defaultAllocation;	/* Default number of sectors to allocate on file extend */
-	int defaultCopies;		/* Default number of copies to make of new files */
-	MgwfsInode_t **inodeList; /* List of our files maintained as local inodes */
-	int numInodesUsed;		/* number of items in list */
-	int numInodesAvailable; /* number of items available in list */
-	int dirtyInodes[MAX_DIRTY_INODE];
-	int numDirtyInodes;
-	int indexSysDirty;		/* index.sys needs updating */
-	int freeMapDirty;		/* freemap has been updated */
-	uint32_t homeLbas[FSYS_MAX_ALTS];
-	FsysHomeBlock homeBlk;	/* A copy of our home block from disk */
-	FsysHeader indexSysHdr;	/* copy of the file header of index.sys */
-	uint32_t baseSector;	/* sector offset to start of our fs if in a partition */
-	uint32_t *indexSys;		/* contents of index.sys */
+	RwBuff_t rwBuff;
 	uint32_t sectorsFree;	/* Total number of free sectors */
 	uint32_t sectorsUsed;	/* Total number of used sectors */
 	uint32_t sectorsLost;	/* Total number of sectors lost track of */
 	int freeMapEntriesUsed;	/* Number of entries used in freemap */
 	int freeMapEntriesAvail;/* Maximum number of freemap entries available */
-	FsysRetPtr *freeMap;	/* contents of freemap.sys */
+} FreeMap_t;
+
+#define FREEMAP_RP_PTR(ptr) (FsysRetPtr *)(ptr->rwBuff.buff)
+
+typedef struct MgwfsSuper_t
+{
+	/* Not sure if a mutex is needed, but just to be safe we use one to force single threading */
+	pthread_mutex_t ourMutex;
+	int fd;					/* file descriptor used to read/write image file */
+	const char *imageName;	/* path to the image file */
+	uint32_t verbose;		/* verbose flags */
+	int defaultAllocation;	/* Default number of sectors to allocate on file extend */
+	int defaultCopies;		/* Default number of copies to make of new files */
+	uint32_t baseSector;	/* sector offset to start of our fs if in a partition */
+	uint32_t homeLbas[FSYS_MAX_ALTS];
+	FsysHomeBlock homeBlk;	/* A copy of our home block from disk */
+	FsysHeader indexSysHdr;	/* copy of the file header of index.sys */
+	uint32_t *indexSys;		/* Contents of index.sys file */
+	MgwfsInode_t **inodeList;
+	int numInodesUsed;		/* number of items in list */
+	int numInodesAvailable; /* number of items available in list */
+	FreeMap_t freeMap;		/* Contents of freemap.sys file */
+	pthread_mutex_t dirtyStuffMutex;
+	int dirtyInodes[MAX_DIRTY_INODE];	/* List of inodes to write back to disk */
+	int numDirtyInodes;		/* Number of items in dirtyInodes */
+//	uint32_t *indexSys;		/* contents of index.sys */
+//	FsysRetPtr *freeMap;	/* contents of freemap.sys */
 	FILE *logFile;			/* Defaults to stdout */
 	FILE *errFile;			/* Defaults to stderr */
 	FuseFH_t *fuseFHs;		/* list of fuse open files */
@@ -225,6 +238,8 @@ extern int writeIndexSys(MgwfsSuper_t *super);
 extern int writeFreeMapSys(MgwfsSuper_t *super);
 extern int writeDirectory(MgwfsSuper_t *super, MgwfsInode_t *dir);
 extern MgwfsInode_t *findUnusedInode(MgwfsSuper_t *super);
+extern int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper);
+extern void addToDirty(MgwfsSuper_t *super, int idx);
 
 /* functions in freemap.c */
 extern void mgwfsDumpFreeMap( MgwfsSuper_t *ourSuper, const char *title, const FsysRetPtr *list );
@@ -252,6 +267,5 @@ extern Options_t options;
 
 /* Funcions in fuse.c */
 extern const struct fuse_operations mgwfs_oper;
-extern void mgwfsAddToDirty(MgwfsSuper_t *super, int idx);
 
 #endif /*__MGWFS_H__*/

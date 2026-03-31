@@ -13,7 +13,7 @@
 #include "mgwfs.h"
 
 BootSector_t bootSect;
-MgwfsSuper_t ourSuper = { .ourMutex=PTHREAD_MUTEX_INITIALIZER };
+MgwfsSuper_t ourSuper = { .ourMutex=PTHREAD_MUTEX_INITIALIZER, .dirtyStuffMutex=PTHREAD_MUTEX_INITIALIZER };
 
 Options_t options;
 
@@ -335,8 +335,8 @@ int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32
 		{
 			countSectors(fhp->pointers[ii], FSYS_MAX_FHPTRS, &sectors);
 			++sectors;	/* Account for file header */
-			ourSuper->sectorsFree -= sectors;
-			ourSuper->sectorsUsed += sectors;
+			ourSuper->freeMap.sectorsFree -= sectors;
+			ourSuper->freeMap.sectorsUsed += sectors;
 		}
 	}
 	else
@@ -393,40 +393,83 @@ int readWholeFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int 
 	return retSize;
 }
 
+void addToDirty(MgwfsSuper_t *ourSuper, int idx)
+{
+	int haveFree=0, ii, *dInodes=ourSuper->dirtyInodes;
+	pthread_mutex_lock(&ourSuper->dirtyStuffMutex);
+	for (ii=0; ii < ourSuper->numDirtyInodes; ++ii, ++dInodes)
+	{
+		if ( *dInodes == idx )
+		{
+			pthread_mutex_unlock(&ourSuper->dirtyStuffMutex);
+			return;		// Already in list. Nothing to do.
+		}
+		if ( *dInodes == FSYS_INDEX_FREE )
+			haveFree = 1;
+	}
+	if ( ii >= MAX_DIRTY_INODE )
+	{
+		pthread_mutex_unlock(&ourSuper->dirtyStuffMutex);
+		updateAllMetaData("addToDirty()", ourSuper);
+		addToDirty(ourSuper,idx);
+		return;
+	}
+	if ( haveFree )
+	{
+		// The free entry must always be the last one
+		if ( (ourSuper->verbose&VERBOSE_FUSE_CMD) )
+		{
+			fprintf(ourSuper->logFile, "addToDirty(). Put %d at dirtyInode[%d] and FREE at dirtyInode[%d]\n",
+					idx, ourSuper->numDirtyInodes-1, ourSuper->numDirtyInodes);
+			fflush(ourSuper->logFile);
+		}
+		ourSuper->dirtyInodes[ourSuper->numDirtyInodes-1] = idx;
+		idx = FSYS_INDEX_FREE;
+	}
+	else
+	{
+		if ( (ourSuper->verbose&VERBOSE_FUSE_CMD) )
+		{
+			fprintf(ourSuper->logFile, "addToDirty(). Added inode %d to dirtyInode[%d]\n",
+					idx, ourSuper->numDirtyInodes);
+			fflush(ourSuper->logFile);
+		}
+	}
+	ourSuper->dirtyInodes[ourSuper->numDirtyInodes] = idx;
+	++ourSuper->numDirtyInodes;
+	pthread_mutex_unlock(&ourSuper->dirtyStuffMutex);
+}
+
+
 int flushFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 {
 	return -EIO;
 }
 
-static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
+static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, RwBuff_t *rwBuff)
 {
 	off64_t sector;
 	int alts, rps, ptrIdx=0, retSize=0, blkLimit;
 	ssize_t limit;
 	FsysRetPtr *retPtr;
 	MgwfsFoundFreeMap_t stuff;
-	MgwfsInode_t *inode;
 	int bytes;
 	uint32_t sectors;
-//	const uint8_t *src = fhp->rwBuff;
-//	ssize_t rdSts;
-//	int fd = ourSuper->fd;
 	
-	sectors = (fhp->rwBuffSize + BYTES_PER_SECTOR - 1) / BYTES_PER_SECTOR;
+	sectors = (rwBuff->buffSize + BYTES_PER_SECTOR - 1) / BYTES_PER_SECTOR;
 	bytes = sectors*BYTES_PER_SECTOR;
 	if ( (ourSuper->verbose&VERBOSE_WRITES) )
 	{
 		fprintf(ourSuper->logFile,"%s: writeWholeFile(), rwBuff=%p, rwBuffUsed=%d, rwBuffOffset=0x%lX, rwBuffSize=%d, sectors=%d, bytes=%d\n"
 				,title
-				,fhp->rwBuff
-				,fhp->rwBuffUsed
-				,fhp->rwBuffOffset
-				,fhp->rwBuffSize
+				,rwBuff->buff
+				,rwBuff->buffUsed
+				,rwBuff->buffOffset
+				,rwBuff->buffSize
 				,sectors
 				,bytes
 				);
 	}
-	inode = ourSuper->inodeList[fhp->inode];
 	/* We only write copy 0, so free sectors used by duplicate files, if any */
 	for ( alts = 1; alts < FSYS_MAX_ALTS; ++alts )
 	{
@@ -457,7 +500,7 @@ static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *
 		ptrIdx = 0;
 		retPtr = inode->fsHeader.pointers[0] + 0;
 		inode->fsHeader.clusters = sectors;
-		inode->fsHeader.size = fhp->rwBuffUsed;
+		inode->fsHeader.size = rwBuff->buffUsed;
 		while ( sectors > 0 )
 		{
 			if ( ptrIdx >= FSYS_MAX_FHPTRS )
@@ -538,9 +581,8 @@ static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *
 		retSize += limit;
 #endif
 	}
-	inode->fsHeader.size = fhp->rwBuffUsed;
+	inode->fsHeader.size = rwBuff->buffUsed;
 	inode->fsHeader.mtime = time(NULL);
-	mgwfsAddToDirty(ourSuper, inode->inode_no);
 	return retSize;
 }
 
@@ -556,16 +598,142 @@ int fileFlush(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 	return 0;
 }
 
+static int getNextDirty(MgwfsSuper_t *ourSuper)
+{
+	int nxt = -1;
+	pthread_mutex_lock(&ourSuper->dirtyStuffMutex);
+	if ( ourSuper->numDirtyInodes )
+	{
+		nxt = ourSuper->dirtyInodes[0];
+		memcpy(ourSuper->dirtyInodes + 0, ourSuper->dirtyInodes + 1, (ourSuper->numDirtyInodes-1)*sizeof(int32_t));
+		--ourSuper->numDirtyInodes;
+	}
+	pthread_mutex_unlock(&ourSuper->dirtyStuffMutex);
+	return nxt;
+}
+
+static uint8_t *insertFilenameIntoDir(uint8_t *ptr, int inodeIdx, const char *fileName)
+{
+	int fnLen = strlen(fileName);
+	*ptr++ = inodeIdx&0xFF;
+	*ptr++ = (inodeIdx>>8)&0xFF;
+	*ptr++ = (inodeIdx>>16)&0xFF;
+	*ptr++ = 1;	// Generation number is always 1 for now
+	*ptr++ = fnLen+1;
+	memcpy(ptr,fileName,fnLen);
+	ptr += fnLen;
+	*ptr++ = 0;
+	return ptr;
+}
+
+int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper)
+{
+	int sts=0;
+	int inodeIdx, ii;
+
+	pthread_mutex_lock(&ourSuper->ourMutex);
+	while( (inodeIdx = getNextDirty(ourSuper)) >= 0)
+	{
+		MgwfsInode_t *inode, **iPtr;
+		uint32_t *fhLBA;
+		RwBuff_t rwBuff;
+		uint8_t *tmpBuff;
+		
+		tmpBuff = NULL;
+		inode = ourSuper->inodeList[inodeIdx];
+		rwBuff.buff = NULL;
+		rwBuff.buffErr = 0;
+		switch (inodeIdx)
+		{
+		case FSYS_INDEX_INDEX:
+			tmpBuff = (uint8_t *)calloc(ourSuper->numInodesAvailable, sizeof(uint32_t)*FSYS_MAX_ALTS);
+			iPtr = ourSuper->inodeList;
+			fhLBA = (uint32_t *)tmpBuff;
+			for (ii=0; ii < ourSuper->numInodesUsed; ++ii)
+			{
+				inode = *iPtr++;
+				if ( !inode )
+					*fhLBA = FSYS_EMPTYLBA_BIT;
+				else
+					memcpy(fhLBA, inode->fhSectors, sizeof(uint32_t)*FSYS_MAX_ALTS);
+				fhLBA += FSYS_MAX_ALTS;
+			}
+			rwBuff.buff = tmpBuff;
+			rwBuff.buffSize = ourSuper->numInodesAvailable * (sizeof(uint32_t) * FSYS_MAX_ALTS);
+			rwBuff.buffUsed = ii * (sizeof(uint32_t) * FSYS_MAX_ALTS);
+			rwBuff.buffOffset = rwBuff.buffUsed;
+			break;
+		case FSYS_INDEX_FREE:
+			// FIXME: Rebuild the freemap.sys file here!!!
+			rwBuff.buff = ourSuper->freeMap.rwBuff.buff;
+			rwBuff.buffSize = inode->fsHeader.clusters * FSYS_CLUSTER_SIZE;
+			rwBuff.buffOffset = inode->fsHeader.size;
+			rwBuff.buffUsed = rwBuff.buffOffset;
+			break;
+#if 0
+// Nothing special about the root dir (except for . and ..)
+		case FSYS_INDEX_ROOT:
+			rwBuff.buff = (uint8_t *)ourSuper->indexSys;
+			rwBuff.buffSize = ourSuper->numInodesAvailable * sizeof(uint32_t) * FSYS_MAX_ALTS;
+			rwBuff.buffOffset = ourSuper->numInodesUsed * sizeof(uint32_t) * FSYS_MAX_ALTS;
+			rwBuff.buffUsed = rwBuff.buffOffset;
+			break;
+#endif
+		default:
+			break;
+		}
+		if ( !rwBuff.buff && inode->idxChildTop )
+		{
+			// Pack the directory contents into rwBuff.buff
+			MgwfsInode_t *child;
+			int nxt,siz;
+			uint8_t *ptr;
+			
+			siz = (3+4) + 2*sizeof(uint32_t);
+			nxt = inode->idxChildTop;
+			do
+			{
+				child = ourSuper->inodeList[nxt];
+				siz += sizeof(uint32_t) + strlen(child->fileName)+1;
+			} while ( (nxt = child->idxNextInode) );
+			rwBuff.buff = (uint8_t *)malloc(siz);
+			ptr = rwBuff.buff;
+			ptr = insertFilenameIntoDir(ptr, inode->idxParentInode,"..");
+			ptr = insertFilenameIntoDir(ptr, inode->inode_no,".");
+			nxt = inode->idxChildTop;
+			do
+			{
+				child = ourSuper->inodeList[nxt];
+				ptr = insertFilenameIntoDir(ptr, nxt, child->fileName);
+			} while ( (nxt = child->idxNextInode) );
+		}
+		if ( rwBuff.buff )
+		{
+			sts = writeWholeFile("updateAllMetaData()", ourSuper, inode, &rwBuff);
+		}
+		if ( tmpBuff )
+			free(tmpBuff);
+		if ( sts < 0 )
+			break;
+		sts = 0;
+		// FIXME: Update the FH and write it to disk
+	}
+	pthread_mutex_unlock(&ourSuper->ourMutex);
+	return sts;
+}
+
 int fileClose(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 {
 	int sts=0;
 	if ( (fhp->openFlags&(O_RDWR|O_WRONLY)) )
 	{
 		MgwfsInode_t *inode = ourSuper->inodeList[fhp->inode];
-		inode->fsHeader.mtime = time(NULL);
-		sts = writeWholeFile(title,ourSuper,fhp);
+		sts = writeWholeFile(title,ourSuper,inode,&fhp->rwb);
 		if ( sts >= 0 )
-			sts = 0;
+		{
+			addToDirty(ourSuper, inode->inode_no);
+			sts = updateAllMetaData(title,ourSuper);
+		}
 	}
 	return sts;
 }
@@ -629,7 +797,7 @@ MgwfsInode_t *findUnusedInode(MgwfsSuper_t *ourSuper)
 	inode->fsHeader.ctime = time(NULL);
 	inode->fsHeader.id = FSYS_ID_HEADER;
 	ourSuper->inodeList[idx] = inode;
-	ourSuper->indexSysDirty = 1;
+	addToDirty(ourSuper, FSYS_INDEX_INDEX);
 	return inode;
 }
 
@@ -873,7 +1041,7 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 	int idx, rpIdx;
 	int verbSave = ourSuper->verbose;
 	MgwfsSuper_t tmpSuper;
-//	MgwfsFoundFreeMap_t found;
+	FreeMap_t *tmpFreeMap = &tmpSuper.freeMap, *freeMap = &ourSuper->freeMap;
 	FsysRetPtr *ourUsedMap, *rp, *rpMax;
 	uint32_t *indexPtr, mlstrt;
 	MgwfsInode_t *inodePtr, **inodePtrPtr;
@@ -884,14 +1052,14 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 	/* Actually a cheat. We're using the freemap routines to
 	   build a 'used' list instead of a freelist
 	*/
-	fprintf(ourSuper->logFile, "Total entries available in free map: %d, Used in free map: %d\n", ourSuper->freeMapEntriesAvail, ourSuper->freeMapEntriesUsed);
-	fprintf(ourSuper->logFile, "Total sectors free %d, used %d, lost %d\n", ourSuper->sectorsFree, ourSuper->sectorsUsed, ourSuper->sectorsLost);
-	idx = dumpFreemap(ourSuper->logFile, "Contents of freemap before merge:", ourSuper->freeMap, ourSuper->freeMapEntriesAvail, &totalFreeSectors);
+	fprintf(ourSuper->logFile, "Total entries available in free map: %d, Used in free map: %d\n", freeMap->freeMapEntriesAvail, freeMap->freeMapEntriesUsed);
+	fprintf(ourSuper->logFile, "Total sectors free %d, used %d, lost %d\n", freeMap->sectorsFree, freeMap->sectorsUsed, freeMap->sectorsLost);
+	idx = dumpFreemap(ourSuper->logFile, "Contents of freemap before merge:", (FsysRetPtr *)freeMap->rwBuff.buff, freeMap->freeMapEntriesAvail, &totalFreeSectors);
 	fprintf(ourSuper->logFile,"Total free sectors: %d, idx=%d, freeMapUsed=%d %s\n",
 			totalFreeSectors,
 			idx,
-			ourSuper->freeMapEntriesUsed,
-			idx==ourSuper->freeMapEntriesUsed ? "MATCH":" ***DIFFERENT*** ");
+			freeMap->freeMapEntriesUsed,
+			idx==freeMap->freeMapEntriesUsed ? "MATCH":" ***DIFFERENT*** ");
 	memset(&tmpSuper,0,sizeof(tmpSuper));
 //	memset(&found,0,sizeof(found));
 	tmpSuper.verbose = ourSuper->verbose;
@@ -904,10 +1072,10 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 	tmpSuper.inodeList[FSYS_INDEX_FREE] = (MgwfsInode_t *)calloc(1, sizeof(MgwfsInode_t));
 	tmpSuper.inodeList[FSYS_INDEX_FREE]->fsHeader.size = 0;
 	tmpSuper.inodeList[FSYS_INDEX_FREE]->fsHeader.clusters = 512;
-	tmpSuper.freeMapEntriesAvail = 2*(tmpSuper.inodeList[FSYS_INDEX_FREE]->fsHeader.clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
-	ourUsedMap = (FsysRetPtr *)calloc(tmpSuper.freeMapEntriesAvail,sizeof(FsysRetPtr));
-	tmpSuper.freeMap = ourUsedMap;
-	tmpSuper.freeMapEntriesUsed = 0;
+	tmpFreeMap->freeMapEntriesAvail = 2*(tmpSuper.inodeList[FSYS_INDEX_FREE]->fsHeader.clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
+	ourUsedMap = (FsysRetPtr *)calloc(tmpFreeMap->freeMapEntriesAvail,sizeof(FsysRetPtr));
+	tmpFreeMap->rwBuff.buff = (uint8_t *)ourUsedMap;
+	tmpFreeMap->freeMapEntriesUsed = 0;
 	tmp.nblocks = 1;
 	/* Prepopulate the "used" list with the home block usage */
 	for (idx=0; idx < FSYS_MAX_ALTS; ++idx)
@@ -947,18 +1115,18 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 		}
 	}
 	ourSuper->verbose = verbSave;
-	idx = dumpFreemap(ourSuper->logFile, "Contents of \"used\" blocks before merge:", ourUsedMap, tmpSuper.freeMapEntriesAvail, &totalUsedSectors);
+	idx = dumpFreemap(ourSuper->logFile, "Contents of \"used\" blocks before merge:", ourUsedMap, tmpFreeMap->freeMapEntriesAvail, &totalUsedSectors);
 	fprintf(ourSuper->logFile,"Total used sectors: %d, idx=%d, freeMapUsed=%d %s\n",
 			totalUsedSectors,
 			idx,
-			tmpSuper.freeMapEntriesUsed,
-			idx==tmpSuper.freeMapEntriesUsed ? "MATCH":" ***DIFFERENT*** ");
+			tmpFreeMap->freeMapEntriesUsed,
+			idx==tmpFreeMap->freeMapEntriesUsed ? "MATCH":" ***DIFFERENT*** ");
 	fprintf(ourSuper->logFile,"Total of free+used: %d. Total missing: %d\n",
 			totalFreeSectors+totalUsedSectors,
 			ourSuper->homeBlk.max_lba-1-(totalFreeSectors+totalUsedSectors)
 			);
 	rp = ourUsedMap;
-	rpMax = ourUsedMap + tmpSuper.freeMapEntriesAvail;
+	rpMax = ourUsedMap + tmpFreeMap->freeMapEntriesAvail;
 	missingListSize = 0;
 	missingList = NULL;
 	mlptr = NULL;
@@ -1002,20 +1170,20 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 	/* Swap freemap pointer */
 	/* tmpSuper.freeMapEntriesUsed says how many items there are in the "used" list */
 	/* Make a local copy of the actual free map contents */
-	tmpSuper.freeMapEntriesAvail = ourSuper->freeMapEntriesAvail+idx;
-	tmpSuper.freeMap = (FsysRetPtr *)malloc(ourSuper->freeMapEntriesAvail * sizeof(FsysRetPtr));
-	memcpy(tmpSuper.freeMap, ourSuper->freeMap, ourSuper->freeMapEntriesAvail*sizeof(FsysRetPtr));
-	tmpSuper.freeMapEntriesUsed = ourSuper->freeMapEntriesUsed;
+	tmpFreeMap->freeMapEntriesAvail = freeMap->freeMapEntriesAvail+idx;
+	tmpFreeMap->rwBuff.buff = (uint8_t *)malloc(freeMap->freeMapEntriesAvail * sizeof(FsysRetPtr));
+	memcpy(tmpSuper.freeMap.rwBuff.buff, freeMap->rwBuff.buff, freeMap->freeMapEntriesAvail * sizeof(FsysRetPtr));
+	tmpFreeMap->freeMapEntriesUsed = freeMap->freeMapEntriesUsed;
 	/* Copy the actual freemap.sys fileheader to local */
 	tmpSuper.inodeList[FSYS_INDEX_FREE]->fsHeader = ourSuper->inodeList[FSYS_INDEX_FREE]->fsHeader;
 	/* ourUsedMap holds list of used sectors */
 	fprintf(ourSuper->logFile, "Total of used entries list: %d, total of free entries: %d, total of potential both used+free: %d, total available: %d\n",
 			idx,
-			tmpSuper.freeMapEntriesUsed,
-			idx + tmpSuper.freeMapEntriesUsed,
-			tmpSuper.freeMapEntriesAvail);
+			tmpFreeMap->freeMapEntriesUsed,
+			idx + tmpFreeMap->freeMapEntriesUsed,
+			tmpFreeMap->freeMapEntriesAvail);
 	rp = ourUsedMap;
-	rpMax = ourUsedMap + tmpSuper.freeMapEntriesAvail;
+	rpMax = ourUsedMap + tmpFreeMap->freeMapEntriesAvail;
 	/* Walk the list of used sectors and free them */
 	while ( rp < rpMax && rp->start && rp->nblocks )
 	{
@@ -1026,12 +1194,12 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 	fprintf(ourSuper->logFile, "Free'd a total of %d used entries\nThe following should have just one entry from 0x01 to 0x%08X\n",
 			idx,
 			ourSuper->homeBlk.max_lba - 1);
-	idx = dumpFreemap(ourSuper->logFile, "Contents of freemap.sys after merge:", tmpSuper.freeMap, tmpSuper.freeMapEntriesAvail, &totalMergedSectors);
+	idx = dumpFreemap(ourSuper->logFile, "Contents of freemap.sys after merge:", (FsysRetPtr *)tmpFreeMap->rwBuff.buff, tmpFreeMap->freeMapEntriesAvail, &totalMergedSectors);
 	fprintf(ourSuper->logFile,"Total merged sectors: %d, idx=%d, freeMapUsed=%d %s\n",
 			totalFreeSectors,
 			idx,
-			tmpSuper.freeMapEntriesUsed,
-			idx==tmpSuper.freeMapEntriesUsed ? "MATCH":" ***DIFFERENT*** ");
+			tmpFreeMap->freeMapEntriesUsed,
+			idx==tmpFreeMap->freeMapEntriesUsed ? "MATCH":" ***DIFFERENT*** ");
 	fprintf(ourSuper->logFile, "Total free sectors %u, used sectors %u, (total=%u), merged sectors %u (0x%X; diff=%d). Maxlba 0x%X (%d). Lost sectors %d\n",
 			totalFreeSectors,
 			totalUsedSectors,
@@ -1043,7 +1211,7 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 			ourSuper->homeBlk.max_lba,
 			ourSuper->homeBlk.max_lba-1-totalMergedSectors
 			);
-	free(tmpSuper.freeMap);
+	free(tmpFreeMap->rwBuff.buff);
 	free(ourUsedMap);
 	free(tmpSuper.inodeList[FSYS_INDEX_INDEX]);
 	free(tmpSuper.inodeList[FSYS_INDEX_FREE]);
@@ -1371,8 +1539,8 @@ static FuseFH_t *getNewFuseFHidx(MgwfsSuper_t *ourSuper)
 		{
 			if ( !fhp->index )
 			{
-				if ( fhp->rwBuff )
-					free(fhp->rwBuff);
+				if ( fhp->rwb.buff )
+					free(fhp->rwb.buff);
 				memset(fhp, 0, sizeof(FuseFH_t));
 				fhp->index = idx + 1;
 				return fhp;
@@ -1402,8 +1570,8 @@ void freeFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx)
 	if ( idx )
 	{
 		FuseFH_t *fhp = ourSuper->fuseFHs + (idx - 1);
-		if ( fhp->rwBuff )
-			free(fhp->rwBuff);
+		if ( fhp->rwb.buff )
+			free(fhp->rwb.buff);
 		memset(fhp,0,sizeof(FuseFH_t));
 	}
 }

@@ -33,7 +33,7 @@ void mgwfsDumpFreeMap(MgwfsSuper_t *ourSuper, const char *title, const FsysRetPt
 		fprintf(ourSuper->logFile,"mgwfs_dumpfree(): %3d: <empty>\n", ii);
 }
 
-int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSectors)
+int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSectors, int markDirty)
 {
 	if ( stuff )
 	{
@@ -82,7 +82,8 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 							--stuff->allocChange;
 							--freeMapPtr->freeMapEntriesUsed;
 						}
-						addToDirty(ourSuper,FSYS_INDEX_FREE);
+						if ( markDirty )
+							addToDirty(ourSuper, FSYS_INDEX_FREE);
 						return 1;   /* something changed */
 					}
 				}
@@ -119,7 +120,8 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 				memset(FREEMAP_RP_PTR(freeMapPtr) + freeMapPtr->freeMapEntriesUsed - 1, 0, sizeof(FsysRetPtr));
 				--stuff->allocChange;
 				--freeMapPtr->freeMapEntriesUsed;
-				addToDirty(ourSuper,FSYS_INDEX_FREE);
+				if ( markDirty )
+					addToDirty(ourSuper, FSYS_INDEX_FREE);
 				return 1;   /* something changed */
 			}
 		}
@@ -170,7 +172,8 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 					}
 					stuff->result.start = minSector;
 					stuff->result.nblocks = numSectors;
-					addToDirty(ourSuper,FSYS_INDEX_FREE);
+					if ( markDirty )
+						addToDirty(ourSuper, FSYS_INDEX_FREE);
 					return 1;   /* something changed */
 				}
 			}
@@ -184,7 +187,8 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 					stuff->result.nblocks = numSectors;
 					src->start += numSectors;
 					src->nblocks -= numSectors;
-					addToDirty(ourSuper,FSYS_INDEX_FREE);
+					if ( markDirty )
+						addToDirty(ourSuper, FSYS_INDEX_FREE);
 					return 1;   /* something changed */
 				}
 			}
@@ -195,7 +199,7 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 			if ( (ourSuper->verbose & VERBOSE_FREE) )
 				fprintf(ourSuper->logFile,"mgwfs_findfree(): Did not find anything on or after 0x%08X of the right size. Trying again without minSector ...\n", minSector);
 			stuff->minSector = 0;
-			return mgwfsFindFree(ourSuper,stuff,numSectors);
+			return mgwfsFindFree(ourSuper,stuff,numSectors, markDirty);
 		}
 		src = FREEMAP_RP_PTR(freeMapPtr);
 		leastDiffIdx = 0;
@@ -220,7 +224,8 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 			/* remove the found section completely */
 			memmove(src, src + 1, (freeMapPtr->freeMapEntriesUsed - leastDiffIdx) * sizeof(FsysRetPtr));
 			memset(FREEMAP_RP_PTR(freeMapPtr) + freeMapPtr->freeMapEntriesUsed - 1, 0, sizeof(FsysRetPtr));
-			addToDirty(ourSuper, FSYS_INDEX_FREE);
+			if ( markDirty )
+				addToDirty(ourSuper, FSYS_INDEX_FREE);
 			--stuff->allocChange;
 			--freeMapPtr->freeMapEntriesUsed;
 			return 1;   /* something changed */
@@ -230,11 +235,11 @@ int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSec
 }
 
 #define HANDLE_FREE_OVERLAPS (0)
-#define MAX_ENT_TST (4)
+#define MAX_ENT_TST (16)
 #define str(xx) #xx
 #define xstr(xx) str(xx)
 
-int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRetPtr *retp)
+int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRetPtr *retp, int markDirty)
 {
 	if ( ourSuper && retp )
 	{
@@ -275,7 +280,8 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 				/* We are to free ahead of current */
 				src->start = retp->start;
 				src->nblocks += retp->nblocks;
-				addToDirty(ourSuper,FSYS_INDEX_FREE);
+				if ( markDirty )
+					addToDirty(ourSuper, FSYS_INDEX_FREE);
 				freeMapPtr->sectorsUsed -= retp->nblocks;
 				freeMapPtr->sectorsFree += retp->nblocks;
 				if ( (ourSuper->verbose & VERBOSE_FREE) )
@@ -352,7 +358,8 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 					src1->start = 0;
 					src1->nblocks = 0;
 				}
-				addToDirty(ourSuper,FSYS_INDEX_FREE);
+				if ( markDirty )
+					addToDirty(ourSuper, FSYS_INDEX_FREE);
 				if ( (ourSuper->verbose & VERBOSE_FREE) )
 				{
 					fprintf(ourSuper->logFile,"mgwsFreeSectors(): Free'd after entry %4d of %4d to 0x%08X-0x%08X (0x%X)\n",
@@ -402,11 +409,10 @@ int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRet
 		memmove(src + 1, src, (freeMapPtr->freeMapEntriesUsed - ii) * sizeof(FsysRetPtr));
 		src->start = retp->start;
 		src->nblocks = retp->nblocks;
-		addToDirty(ourSuper,FSYS_INDEX_FREE);
+		if ( markDirty )
+			addToDirty(ourSuper, FSYS_INDEX_FREE);
 		if ( stuff )
-		{
 			++stuff->allocChange;
-		}
 		++freeMapPtr->freeMapEntriesUsed;
 //		ourSuper->freeMap[ourSuper->freeMapEntriesUsed].start = 0;
 //		ourSuper->freeMap[ourSuper->freeMapEntriesUsed].nblocks = 0;
@@ -577,7 +583,7 @@ int main(int argc, char **argv)
 	allocated = 0;
 	if ( retSec.start )
 	{
-		mgwfsFreeSectors(&super, &found, &retSec);
+		mgwfsFreeSectors(&super, &found, &retSec, TRUE);
 		if ( super.verbose )
 			mgwfsDumpFreeMap(&super,"Freelist after sectors free'd:", sampleFreeMap);
 	}

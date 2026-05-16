@@ -25,6 +25,15 @@ static void clearDirty(MgwfsSuper_t *super)
 }
 #endif
 
+#if !NO_MUTEXES
+static pthread_mutex_t rdMutex = PTHREAD_MUTEX_INITIALIZER;
+
+void fuse_destroy_mutex(void)
+{
+	pthread_mutex_destroy(&rdMutex);
+}
+#endif
+
 static void *mgwfs_init(struct fuse_conn_info *conn, struct fuse_config *cfg)
 {
 	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
@@ -49,7 +58,7 @@ static int mgwfs_getattr(const char *path, struct stat *stbuf,
 		fflush(ourSuper.logFile);
 	}
 	memset(stbuf, 0, sizeof(struct stat));
-	pthread_mutex_lock(&ourSuper.ourMutex);
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	if ( (idx = findInode(&ourSuper, FSYS_INDEX_ROOT, path)) <= 0 )
 	{
 		if ( !strcmp(path, "/index.sys") )
@@ -90,7 +99,7 @@ static int mgwfs_getattr(const char *path, struct stat *stbuf,
 		stbuf->st_gid = getgid();
 		stbuf->st_uid = getuid();
 	}
-	pthread_mutex_unlock(&ourSuper.ourMutex);
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	return ret;
 }
 
@@ -109,13 +118,13 @@ static int mgwfs_readdir(const char *path,
 		fprintf(ourSuper.logFile, "FUSE mgwfs_readdir(path='%s',buf=%p,offset=%ld,fi,flags=0x%X)\n", path, buf, offset,flags);
 		fflush(ourSuper.logFile);
 	}
-	pthread_mutex_lock(&ourSuper.ourMutex);
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	idx = findInode(&ourSuper,FSYS_INDEX_ROOT,path);
 	if (!idx)
 	{
 		fprintf(ourSuper.logFile, "FUSE mgwfs_readdir() returned -ENOENT because '%s' could not be found\n", path);
 		fflush(ourSuper.logFile);
-		pthread_mutex_unlock(&ourSuper.ourMutex);
+		UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 		return -ENOENT;
 	}
 	inode = ourSuper.inodeList[idx];
@@ -123,7 +132,7 @@ static int mgwfs_readdir(const char *path,
 	{
 		fprintf(ourSuper.logFile, "FUSE mgwfs_readdir() returned -ENOENT because '%s' (inode %d) is not a directory\n", path, idx);
 		fflush(ourSuper.logFile);
-		pthread_mutex_unlock(&ourSuper.ourMutex);
+		UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 		return -ENOENT;
 	}
 	filler(buf, ".", NULL, 0, FUSE_FILL_DIR_PLUS);
@@ -162,7 +171,7 @@ static int mgwfs_readdir(const char *path,
 			break;
 		idx = inode->idxNextInode;
 	}
-	pthread_mutex_unlock(&ourSuper.ourMutex);
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	return 0;
 }
 
@@ -185,7 +194,7 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 #endif
 	do
 	{
-		pthread_mutex_lock(&ourSuper.ourMutex);
+		LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 		idx = findInode(&ourSuper,FSYS_INDEX_ROOT,path);
 		if ( options.read_write && (fi->flags & O_CREAT) )
 		{
@@ -275,7 +284,7 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 		}
 	} while (0);
 	fflush(ourSuper.logFile);
-	pthread_mutex_unlock(&ourSuper.ourMutex);
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	return retVal;
 }
 
@@ -390,7 +399,7 @@ static int mgwfs_read(const char *path, char *buf, size_t size, off_t offset,
 	FuseFH_t *fhp;
 	MgwfsInode_t *inode;
 	
-	pthread_mutex_lock(&ourSuper.ourMutex);
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	do
 	{
 		size_t cpyAmt;
@@ -468,7 +477,7 @@ static int mgwfs_read(const char *path, char *buf, size_t size, off_t offset,
 	} while (0);
 	if ( retVal < 0 )
 		fflush(ourSuper.logFile);
-	pthread_mutex_unlock(&ourSuper.ourMutex);
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	return retVal;
 }
 
@@ -484,7 +493,7 @@ static int mgwfs_release(const char *path, struct fuse_file_info *fi)
 	{
 		FuseFH_t *fhp;
 		
-		pthread_mutex_lock(&ourSuper.ourMutex);
+		LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 		fhp = getFuseFHidx(&ourSuper,fi->fh);
 		if ( --fhp->instances <= 0 )
 		{
@@ -492,7 +501,7 @@ static int mgwfs_release(const char *path, struct fuse_file_info *fi)
 			freeFuseFHidx(&ourSuper, fi->fh);
 			fi->fh = 0;
 		}
-		pthread_mutex_unlock(&ourSuper.ourMutex);
+		UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	}
 	return sts;
 }
@@ -540,9 +549,9 @@ static int mgwfs_access(const char *path, int flags)
 {
 	int idx;
 	
-	pthread_mutex_lock(&ourSuper.ourMutex);
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	idx = findInode(&ourSuper,FSYS_INDEX_ROOT,path);
-	pthread_mutex_unlock(&ourSuper.ourMutex);
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	return idx ? 0 : -ENOENT;
 }
 
@@ -551,10 +560,10 @@ static int mgwfs_unlink(const char *path)
 	int verbLen,retVal= -ENOENT, idx;
 	MgwfsSuper_t *super = &ourSuper;
 	FsysRetPtr tmp;
-	uint32_t *indexPtr;
+	IndexSys_t *indexPtr;
 	char verbBuff[200];
 	
-	pthread_mutex_lock(&super->ourMutex);
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	do
 	{
 		MgwfsInode_t *parent, *prev, *curr, *next;
@@ -618,7 +627,7 @@ static int mgwfs_unlink(const char *path)
 		}
 		tmp.nblocks = 1;
 		// Need to free the sectors assigned to the file headers assigned to this file
-		indexPtr = super->indexSys+(curr->inode_no*FSYS_MAX_ALTS);
+		indexPtr = super->indexSys+curr->inode_no;
 		verbLen = 0;
 		if ( (super->verbose&VERBOSE_FUSE_CMD) )
 		{
@@ -627,7 +636,7 @@ static int mgwfs_unlink(const char *path)
 		}
 		for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
 		{
-			if ( ((tmp.start = indexPtr[ii])&FSYS_LBA_MASK) )
+			if ( ((tmp.start = indexPtr->lba[ii])&FSYS_LBA_MASK) )
 			{
 				if ( verbLen )
 				{
@@ -636,9 +645,9 @@ static int mgwfs_unlink(const char *path)
 										tmp.start,
 										tmp.nblocks);
 				}
-				mgwfsFreeSectors(super,NULL,&tmp);
+				mgwfsFreeSectors(super,NULL,&tmp,TRUE);
 				// Need to mark the entries in index.sys as available
-				indexPtr[ii] = FSYS_EMPTYLBA_BIT;
+				indexPtr->lba[ii] = FSYS_EMPTYLBA_BIT;
 			}
 		}
 		addToDirty(super,FSYS_INDEX_INDEX);
@@ -655,7 +664,7 @@ static int mgwfs_unlink(const char *path)
 										rp->start,
 										rp->nblocks);
 				}
-				mgwfsFreeSectors(super, NULL, rp);
+				mgwfsFreeSectors(super, NULL, rp, TRUE);
 			}
 		}
 		if ( verbLen )
@@ -664,7 +673,7 @@ static int mgwfs_unlink(const char *path)
 		free(curr);
 	} while ( 0 );
 	fflush(super->logFile);
-	pthread_mutex_unlock(&super->ourMutex);
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	return retVal;
 }
 
@@ -706,7 +715,7 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 #endif
 	do
 	{
-		pthread_mutex_lock(&ourSuper.ourMutex);
+		LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 		if ( !fi->fh )
 		{
 			fprintf(ourSuper.logFile, "FUSE mgwfs_write('%s',%p,%ld,0x%lX,%ld) returned -EPERM because has not been open()'d\n", path, buf, size, offset, fi->fh);
@@ -783,7 +792,7 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 			fflush(ourSuper.logFile);
 		}
 	} while (0);
-	pthread_mutex_unlock(&ourSuper.ourMutex);
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	fflush(ourSuper.logFile);
 	return cpyAmt;
 }
@@ -798,7 +807,7 @@ static int mgwfs_flush(const char *path, struct fuse_file_info *fi)
 		fprintf(ourSuper.logFile, "FUSE mgwfs_flush('%s',%ld) returned -EPERM because has not been open()'d\n", path, fi->fh);
 		return -EPERM;
 	}
-	pthread_mutex_lock(&ourSuper.ourMutex);
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	fhp = getFuseFHidx(&ourSuper,fi->fh);
 	if ( fhp )
 	{
@@ -818,7 +827,7 @@ static int mgwfs_flush(const char *path, struct fuse_file_info *fi)
 	}
 	else
 		sts = -EIO;
-	pthread_mutex_unlock(&ourSuper.ourMutex);
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	return sts;
 }
 
@@ -975,9 +984,9 @@ static off_t lseek_locked(const char *path, off_t off, int whence, struct fuse_f
 static off_t mgwfs_lseek(const char *path, off_t off, int whence, struct fuse_file_info *fi)
 {
 	off_t sts;
-	pthread_mutex_lock(&ourSuper.ourMutex);
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	sts = lseek_locked(path,off,whence,fi);
-	pthread_mutex_unlock(&ourSuper.ourMutex);
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	return sts;
 }
 
@@ -994,7 +1003,7 @@ static int mgwfs_truncate(const char *path, off_t offset, struct fuse_file_info 
 	{
 		FuseFH_t *fhp;
 		
-		pthread_mutex_lock(&ourSuper.ourMutex);
+		LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 		fhp = getFuseFHidx(&ourSuper, fi->fh);
 		if ( (fhp->openFlags & (O_RDWR|O_WRONLY)) )
 		{
@@ -1005,7 +1014,7 @@ static int mgwfs_truncate(const char *path, off_t offset, struct fuse_file_info 
 				fhp->rwb.buffOffset = offset;
 			}
 		}
-		pthread_mutex_unlock(&ourSuper.ourMutex);
+		UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	}
 	return sts;
 }

@@ -3,6 +3,13 @@
 
 #define _LARGEFILE64_SOURCE 
 #define FUSE_USE_VERSION 31
+#define NO_MUTEXES 1
+#ifndef TRUE
+#define TRUE (1)
+#endif
+#ifndef FALSE
+#define FALSE (0)
+#endif
 
 #include <fuse3/fuse.h>
 #include <stdio.h>
@@ -17,9 +24,11 @@
 #include <stddef.h>
 #include <linux/magic.h>
 #include <sys/vfs.h>
-#include <pthread.h>
 #include <assert.h>
 #include <ctype.h>
+#if !NO_MUTEXES
+#include <pthread.h>
+#endif
 
 typedef uint32_t sector_t;
 #define FSYS_FEATURES (FSYS_FEATURES_CMTIME|FSYS_FEATURES_JOURNAL)
@@ -64,6 +73,9 @@ enum
 	VERB_BIT_FUSE,
 	VERB_BIT_FUSE_CMD,
 	VERB_BIT_WRITES,
+#if !NO_MUTEXES
+	VERB_BIT_LOCKS,
+#endif
 	VERB_BIT_MAX
 };
 
@@ -84,6 +96,9 @@ enum
 #define VERBOSE_FUSE		(1<<VERB_BIT_FUSE)		/* Show fuse stuff */
 #define VERBOSE_FUSE_CMD	(1<<VERB_BIT_FUSE_CMD)	/* Show fuse commands */
 #define VERBOSE_WRITES		(1<<VERB_BIT_WRITES)	/* Show details of anything related to file writes */
+#if !NO_MUTEXES
+#define VERBOSE_LOCKS		(1<<VERB_BIT_LOCKS)		/* Show details of lock/unlock */
+#endif
 #define VERBOSE_ANY			((1<<VERB_BIT_MAX)-1)	/* Any verbose bit */
 
 typedef struct
@@ -118,25 +133,29 @@ typedef struct
 
 #define FREEMAP_RP_PTR(ptr) (FsysRetPtr *)(ptr->rwBuff.buff)
 
+typedef struct
+{
+	uint32_t lba[FSYS_MAX_ALTS];
+} IndexSys_t;
+
 typedef struct MgwfsSuper_t
 {
 	/* Not sure if a mutex is needed, but just to be safe we use one to force single threading */
-	pthread_mutex_t ourMutex;
 	int fd;					/* file descriptor used to read/write image file */
 	const char *imageName;	/* path to the image file */
 	uint32_t verbose;		/* verbose flags */
 	int defaultAllocation;	/* Default number of sectors to allocate on file extend */
 	int defaultCopies;		/* Default number of copies to make of new files */
 	uint32_t baseSector;	/* sector offset to start of our fs if in a partition */
+	uint32_t maxHb;			/* maximum home block sector */
 	uint32_t homeLbas[FSYS_MAX_ALTS];
 	FsysHomeBlock homeBlk;	/* A copy of our home block from disk */
 	FsysHeader indexSysHdr;	/* copy of the file header of index.sys */
-	uint32_t *indexSys;		/* Contents of index.sys file */
+	IndexSys_t *indexSys;	/* Contents of index.sys file */
 	MgwfsInode_t **inodeList;
 	int numInodesUsed;		/* number of items in list */
 	int numInodesAvailable; /* number of items available in list */
 	FreeMap_t freeMap;		/* Contents of freemap.sys file */
-	pthread_mutex_t dirtyStuffMutex;
 	int dirtyInodes[MAX_DIRTY_INODE];	/* List of inodes to write back to disk */
 	int numDirtyInodes;		/* Number of items in dirtyInodes */
 //	uint32_t *indexSys;		/* contents of index.sys */
@@ -146,6 +165,24 @@ typedef struct MgwfsSuper_t
 	FuseFH_t *fuseFHs;		/* list of fuse open files */
 	int numFuseFHs;			/* number of items available in fuseFHs */
 } MgwfsSuper_t;
+
+#if !NO_MUTEXES
+extern void mgwfs_destroy_mutex(void);
+extern void fuse_destroy_mutex(void);
+extern void mgwfs_lock_it(const char *name, MgwfsSuper_t *ourSuper, pthread_mutex_t *mutex, const char *fileName, int lineNo);
+extern void mgwfs_unlock_it(const char *name, MgwfsSuper_t *ourSuper, pthread_mutex_t *mutex, const char *fileName, int lineNo);
+#define DEBUG_LOCKS (1)
+#if DEBUG_LOCKS
+#define LOCK_IT(name, ss, xx) mgwfs_lock_it(name, ss, xx, __FILE__, __LINE__ )
+#define UNLOCK_IT(name, ss, xx) mgwfs_unlock_it(name, ss, xx, __FILE__, __LINE__)
+#else
+#define LOCK_IT(name, ss, xx) pthread_mutex_lock(xx)
+#define UNLOCK_IT(name, ss, xx) pthread_mutex_unlock(xx)
+#endif
+#else
+#define LOCK_IT(name, ss, xx) do { ; } while (0)
+#define UNLOCK_IT(name, ss, xx) do { ; } while (0)
+#endif
 
 typedef struct
 {
@@ -219,13 +256,13 @@ extern int fileFlush(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern void displayFileHeader(FILE *outp, FsysHeader *fhp, int retrievalsToo);
 extern void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t cksum);
 extern int getHomeBlock(MgwfsSuper_t *ourSuper, off64_t maxHb, off64_t sizeInSectors, uint32_t *ckSumP);
-extern int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp);
+extern int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, IndexSys_t *lbas, FsysHeader *fhp);
 extern int readWholeFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr);
 //extern int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern int flushFile(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
-extern void dumpIndex(FILE *outp, uint32_t *indexBase, int bytes);
+extern void dumpIndex(FILE *outp, IndexSys_t *indexBase, int bytes);
 extern int dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int maxEntries, uint32_t *totSectors );
-extern void dumpDir(FILE *outp, uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, uint32_t *indexSys );
+extern void dumpDir(FILE *outp, uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, IndexSys_t *indexSys );
 extern void verifyFreemap(MgwfsSuper_t *ourSuper);
 extern int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest);
 extern int tree(MgwfsSuper_t *ourSuper, int topIdx, int nest);
@@ -243,8 +280,8 @@ extern void addToDirty(MgwfsSuper_t *super, int idx);
 
 /* functions in freemap.c */
 extern void mgwfsDumpFreeMap( MgwfsSuper_t *ourSuper, const char *title, const FsysRetPtr *list );
-extern int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSectors );
-extern int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRetPtr *retp);
+extern int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSectors, int markDirty );
+extern int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRetPtr *retp, int markDirty);
 /*
  * Command line options
  */

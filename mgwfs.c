@@ -13,9 +13,40 @@
 #include "mgwfs.h"
 
 BootSector_t bootSect;
-MgwfsSuper_t ourSuper = { .ourMutex=PTHREAD_MUTEX_INITIALIZER, .dirtyStuffMutex=PTHREAD_MUTEX_INITIALIZER };
+MgwfsSuper_t ourSuper;
 
 Options_t options;
+
+#if !NO_MUTEXES
+static pthread_mutex_t wrMutex = PTHREAD_MUTEX_INITIALIZER;
+
+void mgwfs_destroy_mutex(void)
+{
+	pthread_mutex_destroy(&wrMutex);
+}
+
+#if DEBUG_LOCKS
+void mgwfs_lock_it(const char *name, MgwfsSuper_t *ourSuper, pthread_mutex_t *mutex, const char *fileName, int lineNo)
+{
+	if ( (ourSuper->verbose&VERBOSE_LOCKS) )
+	{
+		fprintf(ourSuper->logFile, "mgwfs_lock_it() %s:%d LOCKing %s\n", fileName, lineNo, name);
+		fflush(ourSuper->logFile);
+	}
+	pthread_mutex_lock(mutex);
+}
+
+void mgwfs_unlock_it(const char *name, MgwfsSuper_t *ourSuper, pthread_mutex_t *mutex, const char *fileName, int lineNo)
+{
+	if ( (ourSuper->verbose&VERBOSE_LOCKS) )
+	{
+		fprintf(ourSuper->logFile, "mgwfs_unlock_it() %s:%d UNLOCKing %s\n", fileName, lineNo, name);
+		fflush(ourSuper->logFile);
+	}
+	pthread_mutex_unlock(mutex);
+}
+#endif	/* DEBUG_LOCKS */
+#endif	/* NO_MUTEXES */
 
 void displayFileHeader(FILE *outp, FsysHeader *fhp, int retrievalsToo)
 {
@@ -276,7 +307,7 @@ int getHomeBlock(MgwfsSuper_t *ourSuper, off64_t maxHbSector, off64_t diskSizeIn
 	return good;
 }
 
-int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32_t lbas[FSYS_MAX_ALTS], FsysHeader *fhp)
+int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, IndexSys_t *lbas, FsysHeader *fhp)
 {
 	FsysHeader lclHdrs[FSYS_MAX_ALTS], *lclFhp=lclHdrs;
 	int fd, ii, good=0, match=0;
@@ -288,7 +319,7 @@ int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, uint32
 	fd = ourSuper->fd;
 	for (ii=0; ii < FSYS_MAX_ALTS; ++ii, ++lclFhp)
 	{
-		sector = lbas[ii]+ourSuper->baseSector;
+		sector = lbas->lba[ii] + ourSuper->baseSector;
 		if ( (ourSuper->verbose&VERBOSE_HEADERS) )
 			fprintf(ourSuper->logFile,"Attempting to read file header for '%s' at sector 0x%lX\n", title, sector);
 		if ( lseek64(fd,sector*512,SEEK_SET) == (off64_t)-1 )
@@ -396,12 +427,34 @@ int readWholeFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int 
 void addToDirty(MgwfsSuper_t *ourSuper, int idx)
 {
 	int haveFree=0, ii, *dInodes=ourSuper->dirtyInodes;
-	pthread_mutex_lock(&ourSuper->dirtyStuffMutex);
-	for (ii=0; ii < ourSuper->numDirtyInodes; ++ii, ++dInodes)
+	
+	if ( (ourSuper->verbose&VERBOSE_WRITES) )
+	{
+		// Techincally, a race condition. But for now, leave it as is to keep the log file from getting too big.	
+		if ( idx == 1 && ourSuper->numDirtyInodes >= 2 && (ourSuper->dirtyInodes[0] == 1 || ourSuper->dirtyInodes[1] == 1) )
+		{
+			fprintf(ourSuper->logFile, "addToDirty(): Inode %d is already in list at dirtyInodes[%d). Skipped insert.\n",
+					idx, ourSuper->dirtyInodes[0] == 1 ? 0 : 1);
+			fflush(ourSuper->logFile);
+			return;
+		}
+	}
+	LOCK_IT("wrMutex", ourSuper, &wrMutex);
+	if ( (ourSuper->verbose&VERBOSE_WRITES) )
+	{
+		fprintf(ourSuper->logFile, "addToDirty(): Attempting to add %d to list\n", idx);
+		fflush(ourSuper->logFile);
+	}
+	for ( ii = 0; ii < ourSuper->numDirtyInodes; ++ii, ++dInodes )
 	{
 		if ( *dInodes == idx )
 		{
-			pthread_mutex_unlock(&ourSuper->dirtyStuffMutex);
+			UNLOCK_IT("wrMutex", ourSuper, &wrMutex);
+			if ( (ourSuper->verbose&VERBOSE_WRITES) )
+			{
+				fprintf(ourSuper->logFile,"addToDirty(): Already in list: %d\n", idx);
+				fflush(ourSuper->logFile);
+			}
 			return;		// Already in list. Nothing to do.
 		}
 		if ( *dInodes == FSYS_INDEX_FREE )
@@ -409,7 +462,12 @@ void addToDirty(MgwfsSuper_t *ourSuper, int idx)
 	}
 	if ( ii >= MAX_DIRTY_INODE )
 	{
-		pthread_mutex_unlock(&ourSuper->dirtyStuffMutex);
+		if ( (ourSuper->verbose&VERBOSE_WRITES) )
+		{
+			fprintf(ourSuper->logFile,"addToDirty(): No room left in list to add %d. Purging all entries and trying again.\n", idx);
+			fflush(ourSuper->logFile);
+		}
+		UNLOCK_IT("wrMutex", ourSuper, &wrMutex);
 		updateAllMetaData("addToDirty()", ourSuper);
 		addToDirty(ourSuper,idx);
 		return;
@@ -428,7 +486,7 @@ void addToDirty(MgwfsSuper_t *ourSuper, int idx)
 	}
 	else
 	{
-		if ( (ourSuper->verbose&VERBOSE_FUSE_CMD) )
+		if ( (ourSuper->verbose&(VERBOSE_FUSE_CMD|VERBOSE_WRITES)) )
 		{
 			fprintf(ourSuper->logFile, "addToDirty(). Added inode %d to dirtyInode[%d]\n",
 					idx, ourSuper->numDirtyInodes);
@@ -437,7 +495,7 @@ void addToDirty(MgwfsSuper_t *ourSuper, int idx)
 	}
 	ourSuper->dirtyInodes[ourSuper->numDirtyInodes] = idx;
 	++ourSuper->numDirtyInodes;
-	pthread_mutex_unlock(&ourSuper->dirtyStuffMutex);
+	UNLOCK_IT("wrMutex", ourSuper, &wrMutex);
 }
 
 
@@ -446,22 +504,36 @@ int flushFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 	return -EIO;
 }
 
+static int allocateSectors( MgwfsSuper_t *ourSuper, FsysRetPtr *retPtr, MgwfsFoundFreeMap_t *stuff, int numCopies, int numSectors)
+{
+#if 0
+	retPtr = inode->fsHeader.pointers[0] + ptrIdx;
+	retPtr->nblocks = stuff.result.nblocks;
+	retPtr->start = stuff.result.start;
+	sectors -= stuff.result.nblocks;
+	++ptrIdx;
+#endif
+	return -1;
+}
+
 static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, RwBuff_t *rwBuff)
 {
 	off64_t sector;
-	int alts, rps, ptrIdx=0, retSize=0, blkLimit;
+	int rps, ptrIdx=0, retSize=0, blkLimit;
 	ssize_t limit;
 	FsysRetPtr *retPtr;
 	MgwfsFoundFreeMap_t stuff;
-	int bytes;
+	int bytes, markDirty;
 	uint32_t sectors;
 	
 	sectors = (rwBuff->buffSize + BYTES_PER_SECTOR - 1) / BYTES_PER_SECTOR;
 	bytes = sectors*BYTES_PER_SECTOR;
+	markDirty = inode->inode_no == FSYS_INDEX_FREE ? FALSE : TRUE;
 	if ( (ourSuper->verbose&VERBOSE_WRITES) )
 	{
-		fprintf(ourSuper->logFile,"%s: writeWholeFile(), rwBuff=%p, rwBuffUsed=%d, rwBuffOffset=0x%lX, rwBuffSize=%d, sectors=%d, bytes=%d\n"
+		fprintf(ourSuper->logFile,"%s: writeWholeFile(), inode_no=%d, rwBuff=%p, rwBuffUsed=%d, rwBuffOffset=0x%lX, rwBuffSize=%d, sectors=%d, bytes=%d\n"
 				,title
+				,inode->inode_no
 				,rwBuff->buff
 				,rwBuff->buffUsed
 				,rwBuff->buffOffset
@@ -470,35 +542,31 @@ static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode
 				,bytes
 				);
 	}
-	/* We only write copy 0, so free sectors used by duplicate files, if any */
-	for ( alts = 1; alts < FSYS_MAX_ALTS; ++alts )
-	{
-		for (rps=0; rps < FSYS_MAX_FHPTRS; ++rps)
-		{
-			retPtr = inode->fsHeader.pointers[alts]+rps;
-			if ( !retPtr->nblocks )
-				break;
-			mgwfsFreeSectors(ourSuper,NULL,retPtr);
-			retPtr->nblocks = 0;
-			retPtr->start = 0;
-		}
-	}
 	/* If the file has gotten bigger, free existing retrieval pointers to copy 0 */
 	if ( sectors > inode->fsHeader.clusters )
 	{
+		int newNumSectors = sectors - inode->fsHeader.clusters + ourSuper->defaultAllocation;
+		inode->fsHeader.clusters = newNumSectors;
+		inode->fsHeader.size = rwBuff->buffUsed;
+		// Extend the file an appropriate amount
+		ptrIdx = 0;
 		for (rps=0; rps < FSYS_MAX_FHPTRS; ++rps)
 		{
-			retPtr = inode->fsHeader.pointers[0]+rps;
-			if ( !retPtr->nblocks )
-				break;
-			mgwfsFreeSectors(ourSuper,NULL,retPtr);
-			retPtr->nblocks = 0;
-			retPtr->start = 0;
+			memset(&stuff,0,sizeof(stuff));
+			stuff.minSector = FSYS_HB_ALG(rps,ourSuper->maxHb);
+			retPtr = inode->fsHeader.pointers[rps] + 0;
+			if ( retPtr->nblocks )
+			{
+				while ( retPtr[1].nblocks )
+					++retPtr;
+			}
+			stuff.hints = retPtr;
+//static int allocateSectors( MgwfsSuper_t *ourSuper, FsysRetPtr *retPtr, MgwfsFoundFreeMap_t *stuff, int numCopies, int numSectors)
+
+			if ( allocateSectors(ourSuper, retPtr, &stuff, ourSuper->defaultCopies, newNumSectors) < 0 )
+				return -ENOSPC;
 		}
 		/* Next, allocate all the necessary RP's for the entire file. */
-		memset(&stuff,0,sizeof(stuff));
-		ptrIdx = 0;
-		retPtr = inode->fsHeader.pointers[0] + 0;
 		inode->fsHeader.clusters = sectors;
 		inode->fsHeader.size = rwBuff->buffUsed;
 		while ( sectors > 0 )
@@ -511,7 +579,7 @@ static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode
 						);
 				return -ENOSPC;
 			}
-			if ( !mgwfsFindFree(ourSuper, &stuff, sectors) )
+			if ( !mgwfsFindFree(ourSuper, &stuff, sectors, markDirty) )
 			{
 				fprintf(ourSuper->errFile,"%s: Ran out of room trying to allocate %d sectors for '%s'\n",
 						title,
@@ -601,14 +669,20 @@ int fileFlush(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 static int getNextDirty(MgwfsSuper_t *ourSuper)
 {
 	int nxt = -1;
-	pthread_mutex_lock(&ourSuper->dirtyStuffMutex);
 	if ( ourSuper->numDirtyInodes )
 	{
 		nxt = ourSuper->dirtyInodes[0];
 		memcpy(ourSuper->dirtyInodes + 0, ourSuper->dirtyInodes + 1, (ourSuper->numDirtyInodes-1)*sizeof(int32_t));
 		--ourSuper->numDirtyInodes;
 	}
-	pthread_mutex_unlock(&ourSuper->dirtyStuffMutex);
+	if ( (ourSuper->verbose&VERBOSE_WRITES) )
+	{
+		if ( nxt > 0 )
+			fprintf(ourSuper->logFile, "getNextDirty(): Popped %d\n", nxt);
+		else
+			fprintf(ourSuper->logFile, "getNextDirty(): Dirty list is empty. Returned -1\n");
+		fflush(ourSuper->logFile);
+	}
 	return nxt;
 }
 
@@ -631,7 +705,7 @@ int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper)
 	int sts=0;
 	int inodeIdx, ii;
 
-	pthread_mutex_lock(&ourSuper->ourMutex);
+	LOCK_IT("wrMutex",ourSuper,&wrMutex);
 	while( (inodeIdx = getNextDirty(ourSuper)) >= 0)
 	{
 		MgwfsInode_t *inode, **iPtr;
@@ -685,12 +759,13 @@ int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper)
 		if ( !rwBuff.buff && inode->idxChildTop )
 		{
 			// Pack the directory contents into rwBuff.buff
-			MgwfsInode_t *child;
+			MgwfsInode_t *top, *child;
 			int nxt,siz;
 			uint8_t *ptr;
 			
 			siz = (3+4) + 2*sizeof(uint32_t);
 			nxt = inode->idxChildTop;
+			top = ourSuper->inodeList[inode->inode_no];
 			do
 			{
 				child = ourSuper->inodeList[nxt];
@@ -706,10 +781,17 @@ int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper)
 				child = ourSuper->inodeList[nxt];
 				ptr = insertFilenameIntoDir(ptr, nxt, child->fileName);
 			} while ( (nxt = child->idxNextInode) );
+			if ( (ourSuper->verbose&VERBOSE_WRITES) )
+			{
+				fprintf(ourSuper->logFile, "updateAllMetaData(): Updated directory at inode 0x%X: %s\n", inode->inode_no, top->fileName);
+				dumpDir(ourSuper->logFile,rwBuff.buff,ptr-rwBuff.buff,ourSuper,NULL);
+			}
 		}
 		if ( rwBuff.buff )
 		{
+			UNLOCK_IT("wrMutex", ourSuper, &wrMutex);
 			sts = writeWholeFile("updateAllMetaData()", ourSuper, inode, &rwBuff);
+			LOCK_IT("wrMutex", ourSuper, &wrMutex);
 		}
 		if ( tmpBuff )
 			free(tmpBuff);
@@ -717,8 +799,10 @@ int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper)
 			break;
 		sts = 0;
 		// FIXME: Update the FH and write it to disk
+		if ( (ourSuper->verbose&VERBOSE_WRITES) )
+			fflush(ourSuper->logFile);
 	}
-	pthread_mutex_unlock(&ourSuper->ourMutex);
+	UNLOCK_IT("wrMutex", ourSuper, &wrMutex);
 	return sts;
 }
 
@@ -827,7 +911,7 @@ int fileExtend(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 	}
 	memset(&fMap,0,sizeof(fMap));
 	fMap.hints = rp;
-	if ( !mgwfsFindFree(ourSuper, &fMap, ourSuper->homeBlk.def_extend) )
+	if ( !mgwfsFindFree(ourSuper, &fMap, ourSuper->homeBlk.def_extend, TRUE) )
 	{
 		fprintf(ourSuper->logFile,"fileExtend(): No room to extend file '%s' by %d sectors. Returned ENOSPC\n", inode->fileName, ourSuper->homeBlk.def_extend);
 		return -ENOSPC;
@@ -873,6 +957,7 @@ static int insertIntoDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *dirInode, MgwfsIn
 			inode->idxPrevInode = fileInode->inode_no;
 	}
 	dirInode->idxChildTop = fileInode->inode_no;
+	addToDirty(ourSuper,dirInode->inode_no);
 	return 0;
 }
 
@@ -957,10 +1042,10 @@ int fileWrite(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp, off_t of
 	return -EIO;
 }
 
-void dumpIndex(FILE *outp, uint32_t *indexBase, int bytes)
+void dumpIndex(FILE *outp, IndexSys_t *indexBase, int bytes)
 {
 	int ii=0;
-	uint32_t *index = indexBase;
+	IndexSys_t *index = indexBase;
 	const char *Titles[] = 
 	{
 		"index.sys",
@@ -971,12 +1056,12 @@ void dumpIndex(FILE *outp, uint32_t *indexBase, int bytes)
 	fprintf(outp,"Contents of index.sys:\n");
 	while ( index < indexBase+(bytes+sizeof(uint32_t)-1)/sizeof(uint32_t) )
 	{
-		fprintf(outp, "    %5d: 0x%08X 0x%08X 0x%08X", ii, index[0], index[1], index[2]);
+		fprintf(outp, "    %5d: 0x%08X 0x%08X 0x%08X", ii, index->lba[0], index->lba[1], index->lba[2]);
 		if ( ii < 4 )
 			fprintf(outp, " (%s)", Titles[ii]);
 		fprintf(outp, "\n");
 		++ii;
-		index += 3;
+		++index;
 	}
 }
 
@@ -1003,14 +1088,17 @@ int dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int maxEntrie
 	return ii;
 }
 
-void dumpDir(FILE *outp, uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, uint32_t *indexSys )
+void dumpDir(FILE *outp, uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, IndexSys_t *indexSys )
 {
 	uint8_t *dir = dirBase;
-	int fd, ii=0;
+	int fd=0, ii=0;
 	FsysHeader hdr;
 	
-	fprintf(outp, "Contents of rootdir.sys:\n");
-	fd = ourSuper->fd;
+	if ( indexSys )
+	{
+		fprintf(outp, "Contents of rootdir.sys:\n");
+		fd = ourSuper->fd;
+	}
 	while ( dir < dirBase+bytes )
 	{
 		int txtLen;
@@ -1028,7 +1116,7 @@ void dumpDir(FILE *outp, uint8_t *dirBase, int bytes, MgwfsSuper_t *ourSuper, ui
 		fprintf(outp, "    %5d: 0x%08X 0x%02X %3d %s\n", ii, fid, gen, txtLen, dir );
 		if ( fd > 0 && indexSys )
 		{
-			if ( getFileHeader((char *)dir, ourSuper, FSYS_ID_HEADER, indexSys + fid * FSYS_MAX_ALTS, &hdr) )
+			if ( getFileHeader((char *)dir, ourSuper, FSYS_ID_HEADER, indexSys + fid, &hdr) )
 				displayFileHeader(ourSuper->logFile,&hdr,1|(ourSuper->verbose&VERBOSE_RETPTRS));
 		}
 		++ii;
@@ -1043,7 +1131,8 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 	MgwfsSuper_t tmpSuper;
 	FreeMap_t *tmpFreeMap = &tmpSuper.freeMap, *freeMap = &ourSuper->freeMap;
 	FsysRetPtr *ourUsedMap, *rp, *rpMax;
-	uint32_t *indexPtr, mlstrt;
+	uint32_t mlstrt;
+	IndexSys_t *indexPtr;
 	MgwfsInode_t *inodePtr, **inodePtrPtr;
 	FsysRetPtr tmp, *missingList, *mlptr;
 	int missingListSize;
@@ -1081,19 +1170,19 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 	for (idx=0; idx < FSYS_MAX_ALTS; ++idx)
 	{
 		if ( (tmp.start = ourSuper->homeLbas[idx]) )
-			mgwfsFreeSectors(&tmpSuper,NULL,&tmp);
+			mgwfsFreeSectors(&tmpSuper,NULL,&tmp,FALSE);
 	}
 	/* Populate the rest of the used list by reading all the file headers */
 	indexPtr = ourSuper->indexSys;
-	for (idx=0; idx < ourSuper->indexSysHdr.size/sizeof(uint32_t); idx += FSYS_MAX_ALTS, indexPtr += FSYS_MAX_ALTS)
+	for (idx=0; idx < ourSuper->indexSysHdr.size/sizeof(uint32_t); idx += FSYS_MAX_ALTS, ++indexPtr)
 	{
-		if ( (*indexPtr&FSYS_LBA_MASK) && !(*indexPtr&FSYS_EMPTYLBA_BIT) )
+		if ( (indexPtr->lba[0] & FSYS_LBA_MASK) && !(indexPtr->lba[0] & FSYS_EMPTYLBA_BIT) )
 		{
 			/* Add all the sectors of the file's header */
 			for (rpIdx=0; rpIdx < FSYS_MAX_ALTS; ++rpIdx)
 			{
-				tmp.start = indexPtr[rpIdx];
-				mgwfsFreeSectors(&tmpSuper,NULL,&tmp);
+				tmp.start = indexPtr->lba[rpIdx];
+				mgwfsFreeSectors(&tmpSuper,NULL,&tmp,FALSE);
 			}
 		}
 	}
@@ -1109,7 +1198,7 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 			rpMax = rp+FSYS_MAX_FHPTRS;
 			while ( rp < rpMax && rp->nblocks && rp->start )
 			{
-				mgwfsFreeSectors(&tmpSuper,NULL,rp);
+				mgwfsFreeSectors(&tmpSuper,NULL,rp,FALSE);
 				++rp;
 			}
 		}
@@ -1187,7 +1276,7 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 	/* Walk the list of used sectors and free them */
 	while ( rp < rpMax && rp->start && rp->nblocks )
 	{
-		mgwfsFreeSectors(&tmpSuper,NULL,rp);
+		mgwfsFreeSectors(&tmpSuper,NULL,rp,FALSE);
 		++rp;
 	}
 	idx = rp-ourUsedMap;

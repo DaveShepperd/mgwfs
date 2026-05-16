@@ -44,6 +44,9 @@ static void helpEm(FILE *ofp, const char *progname)
 	fprintf(ofp, "    0x%05X = display anything FUSE related\n", VERBOSE_FUSE);
 	fprintf(ofp, "    0x%05X = display FUSE function calls\n", VERBOSE_FUSE_CMD);
 	fprintf(ofp, "    0x%05X = display anything related to file writes\n", VERBOSE_WRITES);
+#if !NO_MUTEXES
+	fprintf(ofp, "    0x%05X = display details of locks/unlocks\n", VERBOSE_LOCKS);
+#endif
 	fprintf(ofp,
 			"-v           Sets verbose flag to a value of 0x001\n"
 			"-q or --quit Quit before starting fuse stuff (i.e. just read home blocks, don't mount)\n"
@@ -212,6 +215,7 @@ int main(int argc, char *argv[])
 	
 			sizeInSectors = st.st_size/512;
 			maxHb = sizeInSectors > FSYS_HB_RANGE ? FSYS_HB_RANGE:sizeInSectors;
+			ourSuper.maxHb = maxHb;
 			if ( (ourSuper.verbose&VERBOSE_HOME) )
 			{
 				fprintf(ourSuper.logFile, "File size 0x%lX, maxSector=0x%lX, maxHb=0x%lX\n", st.st_size, sizeInSectors, maxHb);
@@ -255,12 +259,12 @@ int main(int argc, char *argv[])
 				fprintf(ourSuper.logFile, "Home block:\n");
 				displayHomeBlock(ourSuper.logFile,&ourSuper.homeBlk,ckSum);
 			}
-			if ( getFileHeader("index.sys", &ourSuper, FSYS_ID_INDEX, ourSuper.homeBlk.index, &ourSuper.indexSysHdr) )
+			if ( getFileHeader("index.sys", &ourSuper, FSYS_ID_INDEX, (IndexSys_t *)ourSuper.homeBlk.index, &ourSuper.indexSysHdr) )
 			{
 				if ( (ourSuper.verbose&VERBOSE_HEADERS) )
 					displayFileHeader(ourSuper.logFile, &ourSuper.indexSysHdr, 1 | (ourSuper.verbose & VERBOSE_RETPTRS));
 				ourSuper.numInodesAvailable = (ourSuper.indexSysHdr.clusters * 512) / (FSYS_MAX_ALTS * sizeof(uint32_t));
-				ourSuper.indexSys = (uint32_t *)calloc(ourSuper.indexSysHdr.clusters * 512, 1);
+				ourSuper.indexSys = (IndexSys_t *)calloc(ourSuper.indexSysHdr.clusters * 512, 1);
 				if ( readWholeFile("index.sys", &ourSuper, (uint8_t*)ourSuper.indexSys, ourSuper.indexSysHdr.size, ourSuper.indexSysHdr.pointers[0]) < 0 )
 				{
 					fprintf(ourSuper.errFile,"Failed to read index.sys file\n");
@@ -303,7 +307,7 @@ int main(int argc, char *argv[])
 			for (ii=1; ii < ourSuper.numInodesAvailable; ++ii)
 			{
 				char tmpName[32];
-				uint32_t *lbas;
+				IndexSys_t *lbas;
 				
 				inode = (MgwfsInode_t *)calloc(1,sizeof(MgwfsInode_t));
 				if ( !inode )
@@ -314,11 +318,11 @@ int main(int argc, char *argv[])
 					return 1;
 				}
 				*inodePtr++ = inode;
-				lbas = ourSuper.indexSys + ii * FSYS_MAX_ALTS;
-				if ( !*lbas )
+				lbas = ourSuper.indexSys + ii;
+				if ( !lbas->lba[0] )
 					break;
 				snprintf(tmpName,sizeof(tmpName),"Inode %d", ii);
-				if ( !(*lbas & FSYS_EMPTYLBA_BIT) )
+				if ( !(lbas->lba[0] & FSYS_EMPTYLBA_BIT) )
 				{
 					if ( getFileHeader(tmpName, &ourSuper, FSYS_ID_HEADER, lbas, &inode->fsHeader) )
 					{
@@ -329,7 +333,7 @@ int main(int argc, char *argv[])
 						else if ( (ourSuper.verbose&VERBOSE_MINIMUM) )
 							fprintf(ourSuper.logFile, "Loaded file header (inode) %4d, lbas: 0x%08X 0x%08X 0x%08X. Type=0x%X (%s)\n",
 								   ii,
-								   lbas[0], lbas[1], lbas[2],
+								   lbas->lba[0], lbas->lba[1], lbas->lba[2],
 								   inode->fsHeader.type,
 								   S_ISDIR(inode->mode) ? "DIR":"REG");
 						memcpy(inode->fhSectors,lbas,FSYS_MAX_ALTS*sizeof(uint32_t));
@@ -435,7 +439,9 @@ int main(int argc, char *argv[])
 		}
 		free(ourSuper.inodeList);
 	}
-	pthread_mutex_destroy(&ourSuper.ourMutex);
-	pthread_mutex_destroy(&ourSuper.dirtyStuffMutex);
+#if !NO_MUTEXES
+	mgwfs_destroy_mutex();
+	fuse_destroy_mutex();
+#endif
 	return ret;
 }

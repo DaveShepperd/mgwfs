@@ -138,6 +138,10 @@ typedef struct
 	uint32_t lba[FSYS_MAX_ALTS];
 } IndexSys_t;
 
+#define SPECIAL_DIRTY_INDEX 0x01
+#define SPECIAL_DIRTY_FREE	0x02
+#define SPECIAL_DIRTY_NEST	0x04
+
 typedef struct MgwfsSuper_t
 {
 	/* Not sure if a mutex is needed, but just to be safe we use one to force single threading */
@@ -158,8 +162,7 @@ typedef struct MgwfsSuper_t
 	FreeMap_t freeMap;		/* Contents of freemap.sys file */
 	int dirtyInodes[MAX_DIRTY_INODE];	/* List of inodes to write back to disk */
 	int numDirtyInodes;		/* Number of items in dirtyInodes */
-//	uint32_t *indexSys;		/* contents of index.sys */
-//	FsysRetPtr *freeMap;	/* contents of freemap.sys */
+	int specialDirtys;
 	FILE *logFile;			/* Defaults to stdout */
 	FILE *errFile;			/* Defaults to stderr */
 	FuseFH_t *fuseFHs;		/* list of fuse open files */
@@ -187,10 +190,9 @@ extern void mgwfs_unlock_it(const char *name, MgwfsSuper_t *ourSuper, pthread_mu
 typedef struct
 {
 	FsysRetPtr result;		/* newly formed selection */
-	FsysRetPtr *hints;		/* hint of what to connect to if possible */
+	FsysRetPtr actual;		/* RP of actual returned sectors */
+	FsysRetPtr hint;		/* hint of what to connect to if possible */
 	uint32_t minSector;		/* minimum sector to look for */
-	int allocChange;		/* number of entries added or deleted */
-	int dirty;				/* freemap has been updated */
 } MgwfsFoundFreeMap_t;
 
 #ifndef S_IFREG
@@ -279,9 +281,12 @@ extern int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper);
 extern void addToDirty(MgwfsSuper_t *super, int idx);
 
 /* functions in freemap.c */
+#define FREEM_FLAG_MARK_DIRTY	(0x01)
+//#define FREEM_FLAG_TRY_ONLY		(0x02)
+//#define FREEM_FLAG_NO_RESCAN	(0x04)
 extern void mgwfsDumpFreeMap( MgwfsSuper_t *ourSuper, const char *title, const FsysRetPtr *list );
-extern int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSectors, int markDirty );
-extern int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, FsysRetPtr *retp, int markDirty);
+extern int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSectors, uint32_t flags );
+extern int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, FsysRetPtr *retp, uint32_t flags);
 /*
  * Command line options
  */

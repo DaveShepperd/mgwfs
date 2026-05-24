@@ -10,7 +10,8 @@
 		DebugCallbackName="gdb"
 		Version="1"
 		OutputFile="%bdmgwfs"
-		CompilerConfigName="Latest Version">
+		CompilerConfigName="Latest Version"
+		Defines="">
 		<Menu>
 			<Target
 				Name="Compile"
@@ -21,7 +22,7 @@
 				OutputExts="*.o"
 				SaveOption="SaveCurrent"
 				RunFromDir="%rw">
-				<Exec CmdLine='gcc -c %xup  %defd -g -o "%bd%n%oe" %i "%f"'/>
+				<Exec CmdLine='gcc -c %xup %defd -g -Wall -Werror -o "%bd%n%oe" %i %f'/>
 			</Target>
 			<Target
 				Name="Link"
@@ -32,7 +33,7 @@
 				Deletable="0"
 				SaveOption="SaveCurrent"
 				RunFromDir="%rw">
-				<Exec CmdLine='gcc %xup -g -o "%o" %f %libs'/>
+				<Exec CmdLine='gcc %xup -g -Wall -Werror -o "%o" %objs'/>
 			</Target>
 			<Target
 				Name="Build"
@@ -128,6 +129,8 @@
 				Name="LinkerOutputType"
 				Value="Executable"/>
 		</List>
+		<Includes/>
+		<Libs PreObjects="0"/>
 	</Config>
 	<Config
 		Name="Release"
@@ -135,7 +138,8 @@
 		DebugCallbackName="gdb"
 		Version="1"
 		OutputFile="%bdmgwfs"
-		CompilerConfigName="Latest Version">
+		CompilerConfigName="Latest Version"
+		Defines="">
 		<Menu>
 			<Target
 				Name="Compile"
@@ -146,7 +150,7 @@
 				OutputExts="*.o"
 				SaveOption="SaveCurrent"
 				RunFromDir="%rw">
-				<Exec CmdLine='gcc -c %xup %defd -o "%bd%n%oe" %i "%f"'/>
+				<Exec CmdLine='gcc -c %xup %defd -o "%bd%n%oe" %i %f'/>
 			</Target>
 			<Target
 				Name="Link"
@@ -157,7 +161,7 @@
 				Deletable="0"
 				SaveOption="SaveCurrent"
 				RunFromDir="%rw">
-				<Exec CmdLine='gcc %xup -o "%o" %f %libs'/>
+				<Exec CmdLine='gcc %xup -o "%o" %objs'/>
 			</Target>
 			<Target
 				Name="Build"
@@ -253,6 +257,8 @@
 				Name="LinkerOutputType"
 				Value="Executable"/>
 		</List>
+		<Includes/>
+		<Libs PreObjects="0"/>
 	</Config>
 	<Files>
 		<Folder

@@ -645,12 +645,11 @@ static int mgwfs_unlink(const char *path)
 										tmp.start,
 										tmp.nblocks);
 				}
-				mgwfsFreeSectors(super,NULL,&tmp,TRUE);
+				mgwfsFreeSectors(super,&tmp,FALSE);
 				// Need to mark the entries in index.sys as available
 				indexPtr->lba[ii] = FSYS_EMPTYLBA_BIT;
 			}
 		}
-		addToDirty(super,FSYS_INDEX_INDEX);
 		// Need to free the sectors assigned to this file
 		for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
 		{
@@ -664,13 +663,15 @@ static int mgwfs_unlink(const char *path)
 										rp->start,
 										rp->nblocks);
 				}
-				mgwfsFreeSectors(super, NULL, rp, TRUE);
+				mgwfsFreeSectors(super, rp, TRUE);
 			}
 		}
 		if ( verbLen )
 			fprintf(super->logFile, "%s\n", verbBuff);
 		super->inodeList[idx] = NULL;
 		free(curr);
+		addToDirty(super,FSYS_INDEX_INDEX);
+		addToDirty(super,FSYS_INDEX_FREE);
 	} while ( 0 );
 	fflush(super->logFile);
 	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);

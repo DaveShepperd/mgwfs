@@ -123,7 +123,7 @@ enum
 #endif
 #define VERBOSE_ANY			((1<<VERB_BIT_MAX)-1)	/* Any verbose bit */
 
-#define MAX_DIRTY_INODE 100
+//#define MAX_DIRTY_INODE 100
 
 typedef struct
 {
@@ -164,8 +164,10 @@ typedef struct MgwfsSuper_t
 	int numInodesUsed;		/* number of items in list */
 	int numInodesAvailable; /* number of items available in list */
 	FreeMap_t freeMap;		/* Contents of freemap.sys file */
-	int dirtyInodes[MAX_DIRTY_INODE];	/* List of inodes to write back to disk */
+//	int dirtyInodes[MAX_DIRTY_INODE];	/* List of inodes to write back to disk */
+	int *dirtyInodes;		/* List of inodes to write back to disk */
 	int numDirtyInodes;		/* Number of items in dirtyInodes */
+	int numDirtyInodesAvailable; /* Number of items in dirtyInodes */
 	int specialDirtys;
 	FILE *logFile;			/* Defaults to stdout */
 	FILE *errFile;			/* Defaults to stderr */

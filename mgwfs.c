@@ -424,6 +424,7 @@ int readWholeFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int 
 	return retSize;
 }
 
+#if 0
 static void dmpDirty(const char *title1, const char *title2, MgwfsSuper_t *ourSuper, int haveRetVal, int retVal)
 {
 	if ( (ourSuper->verbose&VERBOSE_WRITES) )
@@ -436,8 +437,11 @@ static void dmpDirty(const char *title1, const char *title2, MgwfsSuper_t *ourSu
 		ii += (ourSuper->specialDirtys&SPECIAL_DIRTY_FREE)?1:0;
 		len = snprintf(tmpBuf,sizeof(tmpBuf),"%s %s idx=%d ",
 					   title1, title2, ii );
-		for (ii=0; ii < ourSuper->numDirtyInodes; ++ii)
-			len += snprintf(tmpBuf + len, sizeof(tmpBuf) - len, " %d", ourSuper->dirtyInodes[ii]);
+		if ( ourSuper->dirtyInodes )
+		{
+			for ( ii = 0; ii < ourSuper->numDirtyInodes; ++ii )
+				len += snprintf(tmpBuf + len, sizeof(tmpBuf) - len, " %d", ourSuper->dirtyInodes[ii]);
+		}
 		if ( (ourSuper->specialDirtys&SPECIAL_DIRTY_INDEX) )
 			len += snprintf(tmpBuf + len, sizeof(tmpBuf) - len, " %d", FSYS_INDEX_INDEX);
 		if ( (ourSuper->specialDirtys&SPECIAL_DIRTY_FREE) )
@@ -448,10 +452,13 @@ static void dmpDirty(const char *title1, const char *title2, MgwfsSuper_t *ourSu
 		fflush(ourSuper->logFile);
 	}
 }
+#else
+#define dmpDirty(a,b,c,d,e) do { ; } while (0)
+#endif
 
 void addToDirty(const char *title, MgwfsSuper_t *ourSuper, int idx)
 {
-	int ii, *dInodes=ourSuper->dirtyInodes;
+	int ii, *dInodes;
 	
 	LOCK_IT("wrMutex", ourSuper, &wrMutex);
 	if ( idx == FSYS_INDEX_INDEX || idx == FSYS_INDEX_FREE )
@@ -482,30 +489,39 @@ void addToDirty(const char *title, MgwfsSuper_t *ourSuper, int idx)
 		UNLOCK_IT("wrMutex", ourSuper, &wrMutex);
 		return;
 	}
-	for ( ii = 0; ii < ourSuper->numDirtyInodes; ++ii, ++dInodes )
+	if ( (dInodes=ourSuper->dirtyInodes) )
 	{
-		if ( *dInodes == idx )
+		for ( ii = 0; ii < ourSuper->numDirtyInodes; ++ii, ++dInodes )
 		{
-			dmpDirty("addToDirty()", title, ourSuper, 0, 0);
-			UNLOCK_IT("wrMutex", ourSuper, &wrMutex);
-			return;		// Already in list. Nothing to do.
+			if ( *dInodes == idx )
+			{
+				dmpDirty("addToDirty()", title, ourSuper, 0, 0);
+				UNLOCK_IT("wrMutex", ourSuper, &wrMutex);
+				return;		// Already in list. Nothing to do.
+			}
 		}
 	}
-	if ( ii >= MAX_DIRTY_INODE )
+#define ADD_TO_INODE_INCREMENT (1024)
+	if ( !(dInodes=ourSuper->dirtyInodes) || ourSuper->numDirtyInodes >= ourSuper->numDirtyInodesAvailable )
 	{
-		if ( (ourSuper->verbose&VERBOSE_WRITES) )
+		int *newPtr, newCnt;
+		newCnt = ourSuper->numDirtyInodesAvailable + ADD_TO_INODE_INCREMENT;
+		newPtr = (int *)realloc(dInodes, newCnt*sizeof(int));
+		if ( dInodes && (ourSuper->verbose&VERBOSE_WRITES) )
 		{
-			fprintf(ourSuper->logFile,"addToDirty(): No room left in list to add %d. Purging all entries and trying again.\n", idx);
+			fprintf(ourSuper->logFile,"addToDirty(): Ran out of entries. Have %d, bumping to %d.\n",
+					ourSuper->numDirtyInodesAvailable, newCnt);
 			fflush(ourSuper->logFile);
 		}
-		ourSuper->specialDirtys |= SPECIAL_DIRTY_NEST;
-		UNLOCK_IT("wrMutex", ourSuper, &wrMutex);
-		updateAllMetaData("addToDirty()", ourSuper);
-		LOCK_IT("wrMutex",ourSuper,&wrMutex);
-		ourSuper->specialDirtys &= ~SPECIAL_DIRTY_NEST;
-		UNLOCK_IT("wrMutex", ourSuper, &wrMutex);
-		addToDirty("addToDirty() recurse", ourSuper, idx);
-		return;
+		if ( !newPtr )
+		{
+			fprintf(ourSuper->logFile,"addToDirty(): Out of memory trying to add %d entries\n", newCnt);
+			fflush(ourSuper->logFile);
+			return;
+		}
+		ourSuper->dirtyInodes = newPtr;
+		ourSuper->numDirtyInodesAvailable = newCnt;
+		dInodes = newPtr;
 	}
 	ourSuper->dirtyInodes[ourSuper->numDirtyInodes] = idx;
 	++ourSuper->numDirtyInodes;

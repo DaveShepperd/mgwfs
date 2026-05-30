@@ -580,120 +580,95 @@ static int allocateFHSectors( MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, Index
 	return 0;
 }
 
+/*
+ * Ensure every copy (alternate) of 'inode' has retrieval pointers covering at
+ * least 'sectors' sectors, allocating from the freemap as needed. A single
+ * mgwfsFindFree() call can return fewer sectors than requested (fragmented free
+ * space, or a contiguous extend that runs into an occupied region), so we loop:
+ * each round grows the trailing RP when the new chunk abuts it, or starts a
+ * fresh RP otherwise, until the copy is fully covered or we run out of space /
+ * retrieval-pointer slots. Returns 0 on success or a negative errno.
+ */
 static int allocateRPSectors( const char *title, MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, RwBuff_t *rwBuff, int sectors)
 {
-	MgwfsFoundFreeMap_t fMap;
-	FsysRetPtr results[FSYS_MAX_ALTS], actuals[FSYS_MAX_ALTS], *lastRPptrs[FSYS_MAX_ALTS];
-	FsysRetPtr *lastRPptr;
-	int lastRPIndicies[FSYS_MAX_ALTS], altIdx, alts=0, lastRPidx, err=0, defAlloc;
+	int altIdx, alts=0;
 
-	memset(actuals,0,sizeof(actuals));
-	memset(lastRPptrs,0,sizeof(lastRPptrs));
-	memset(lastRPIndicies,0,sizeof(lastRPIndicies));
-	defAlloc = ourSuper->defaultAllocation;
-	if ( !defAlloc )
-		defAlloc = 32;
-	sectors = (sectors + defAlloc - 1) % defAlloc;
-	if ( !sectors )
-		sectors = 32;
-	// Figure out how many copies there are
+	(void)rwBuff;
+	/* Count the copies already present; fall back to the default for a new file. */
 	for (altIdx=0; altIdx < FSYS_MAX_ALTS; ++altIdx)
 	{
-		lastRPptr = inode->fsHeader.pointers[altIdx];
-		if ( lastRPptr->nblocks )
+		if ( inode->fsHeader.pointers[altIdx][0].nblocks )
 			++alts;
 	}
-	if ( !alts )
+	if ( alts < 1 )
 		alts = ourSuper->defaultCopies;
+	if ( alts < 1 )
+		alts = 1;
 	for (altIdx=0; altIdx < alts; ++altIdx)
 	{
-		// Find the last RP
-		for (lastRPidx=0; lastRPidx < FSYS_MAX_FHPTRS-1; ++lastRPidx)
+		FsysRetPtr *rps = inode->fsHeader.pointers[altIdx];
+		int rpIdx, have;
+
+		/* How many sectors does this copy already cover, and where's the first
+		 * free RP slot? */
+		have = 0;
+		for (rpIdx=0; rpIdx < FSYS_MAX_FHPTRS && rps[rpIdx].nblocks; ++rpIdx)
+			have += rps[rpIdx].nblocks;
+		while ( have < sectors )
 		{
-			lastRPptr = inode->fsHeader.pointers[altIdx]+lastRPidx;
-			if ( !lastRPptr->nblocks )
-				break;
-		}
-		if ( lastRPidx >= FSYS_MAX_FHPTRS-1 )
-		{
-			fprintf(ourSuper->logFile, "%s: allocateRPSectors(): No room for a retrieval pointer to extend file '%s' in RP set %d. lastRPidx=%d. Returned ENOSPC\n",
-					title,
-					inode->fileName,
-					altIdx,
-					lastRPidx);
-			err = -ENOSPC;
-			break;
-		}
-		if (lastRPidx)
-			--lastRPidx;
-		lastRPIndicies[altIdx] = lastRPidx;
-		lastRPptr = inode->fsHeader.pointers[lastRPidx] + 0;
-		lastRPptrs[altIdx] = lastRPptr;
-		fMap.hint.start = lastRPptr->start;
-		fMap.hint.nblocks = lastRPptr->nblocks;
-		fMap.minSector = FSYS_COPY_ALG(altIdx, ourSuper->maxHb);
-		if ( !mgwfsFindFree(ourSuper, &fMap, ourSuper->homeBlk.def_extend, 0) )
-		{
-			fprintf(ourSuper->logFile,"%s: allocateRPSectors(): No room to extend file '%s' by %d sectors. Returned ENOSPC\n",
-					title,
-					inode->fileName,
-					ourSuper->homeBlk.def_extend);
-			err = -ENOSPC;
-			break;
-		}
-		results[altIdx] = fMap.result;
-		actuals[altIdx] = fMap.actual;
-	}
-	if ( err < 0 )
-	{
-		for (altIdx=0; altIdx < alts; ++altIdx)
-		{
-			if ( actuals[altIdx].start )
-				mgwfsFreeSectors(ourSuper,actuals+altIdx,0);
-		}
-		return err;
-	}
-	for (altIdx=0; altIdx < alts; ++altIdx)
-	{
-		if ( results[altIdx].start != actuals[altIdx].start )
-		{
-			// The section was extended
-			if ( (ourSuper->verbose&(VERBOSE_WRITES)) )
+			MgwfsFoundFreeMap_t fMap;
+			FsysRetPtr *lastRP = rpIdx ? &rps[rpIdx-1] : NULL;
+			int added;
+
+			memset(&fMap, 0, sizeof(fMap));
+			if ( lastRP )
 			{
-				fprintf(ourSuper->logFile, "%s: allocateRPSectors('%s'). Extended retrival pointer at %d.%d: from 0x%X/0x%X to 0x%X/0x%X\n",
-						title,
-						inode->fileName,
-						altIdx,
-						lastRPIndicies[altIdx],
-						lastRPptrs[altIdx]->start,
-						lastRPptrs[altIdx]->nblocks,
-						results[altIdx].start,
-						results[altIdx].nblocks
-						);
+				/* Offer the trailing RP as a hint so a contiguous chunk just
+				 * extends it instead of consuming another RP slot. */
+				fMap.hint.start = lastRP->start;
+				fMap.hint.nblocks = lastRP->nblocks;
 			}
-			lastRPptrs[altIdx]->start = results[altIdx].start;
-			lastRPptrs[altIdx]->nblocks = results[altIdx].nblocks;
-			continue;
-		}
-		// A new section is needed
-		lastRPptr = lastRPptrs[altIdx];
-		if ( lastRPptr->nblocks )
-		{
-			++lastRPptr;
-			++lastRPIndicies[altIdx];
-		}
-		lastRPptr->start = results[altIdx].start;
-		lastRPptr->nblocks = results[altIdx].nblocks;
-		if ( (ourSuper->verbose&(VERBOSE_WRITES)) )
-		{
-			fprintf(ourSuper->logFile, "%s: allocateRPSectors('%s'). Added a new retrival pointer at %d.%d: 0x%X/0x%X (alts=%d)\n",
-					title,
-					inode->fileName,
-					altIdx,
-					lastRPIndicies[altIdx],
-					results[altIdx].start,
-					results[altIdx].nblocks,
-					alts);
+			fMap.minSector = FSYS_COPY_ALG(altIdx, ourSuper->maxHb);
+			if ( !mgwfsFindFree(ourSuper, &fMap, sectors - have, 0) )
+			{
+				fprintf(ourSuper->logFile,"%s: allocateRPSectors(): No room to grow file '%s' to %d sectors (copy %d had %d). Returned ENOSPC\n",
+						title, inode->fileName, sectors, altIdx, have);
+				return -ENOSPC;
+			}
+			if ( lastRP && fMap.result.start == lastRP->start )
+			{
+				/* Contiguous: the trailing RP simply grew. */
+				added = fMap.result.nblocks - lastRP->nblocks;
+				lastRP->nblocks = fMap.result.nblocks;
+				if ( (ourSuper->verbose&VERBOSE_WRITES) )
+					fprintf(ourSuper->logFile, "%s: allocateRPSectors('%s'): copy %d RP %d extended to 0x%X/0x%X\n",
+							title, inode->fileName, altIdx, rpIdx-1, lastRP->start, lastRP->nblocks);
+			}
+			else
+			{
+				/* A non-contiguous chunk needs its own retrieval pointer. */
+				if ( rpIdx >= FSYS_MAX_FHPTRS )
+				{
+					fprintf(ourSuper->logFile,"%s: allocateRPSectors(): file '%s' copy %d needs more than %ld retrieval pointers. Returned ENOSPC\n",
+							title, inode->fileName, altIdx, (long)FSYS_MAX_FHPTRS);
+					mgwfsFreeSectors(ourSuper, &fMap.result, 0);	/* don't leak the chunk */
+					return -ENOSPC;
+				}
+				rps[rpIdx].start = fMap.result.start;
+				rps[rpIdx].nblocks = fMap.result.nblocks;
+				added = fMap.result.nblocks;
+				if ( (ourSuper->verbose&VERBOSE_WRITES) )
+					fprintf(ourSuper->logFile, "%s: allocateRPSectors('%s'): copy %d added RP %d 0x%X/0x%X\n",
+							title, inode->fileName, altIdx, rpIdx, rps[rpIdx].start, rps[rpIdx].nblocks);
+				++rpIdx;
+			}
+			if ( added <= 0 )		/* defensive: no forward progress -> bail */
+			{
+				fprintf(ourSuper->logFile,"%s: allocateRPSectors(): file '%s' made no progress (copy %d at %d/%d). Returned ENOSPC\n",
+						title, inode->fileName, altIdx, have, sectors);
+				return -ENOSPC;
+			}
+			have += added;
 		}
 	}
 	addToDirty("allocRPSectors()", ourSuper,FSYS_INDEX_FREE);

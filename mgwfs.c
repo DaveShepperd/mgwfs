@@ -960,7 +960,15 @@ int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper)
 			inode->rwb.buffUsed = inode->rwb.buffOffset;
 			break;
 		default:
-			inode->fsHeader.size = inode->rwb.buffUsed;
+			/* Only derive the size from the read/write buffer when that buffer
+			 * actually holds the file's data. After a data flush the buffer is
+			 * freed and zeroed (see end of this loop), so a later metadata-only
+			 * re-dirty -- e.g. utimens or rename after the file was released --
+			 * would otherwise reset fsHeader.size to 0 and the next mount would
+			 * read the file back as empty. With no live buffer the previously
+			 * persisted size already on the header is the truth; leave it. */
+			if ( inode->rwb.buff )
+				inode->fsHeader.size = inode->rwb.buffUsed;
 			break;
 		}
 		/* Don't restamp if utimens (or similar) already set an explicit

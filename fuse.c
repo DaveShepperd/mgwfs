@@ -1384,6 +1384,77 @@ static int mgwfst_utimens(const char *path, const struct timespec tv[2],
 	return ret;
 }
 
+/*
+ * int (*chmod)(const char *, mode_t, struct fuse_file_info *fi);
+ *
+ * The on-disk header in this build (FSYS_FEATURES == FSYS_FEATURES_CMTIME)
+ * carries no permission field, and getattr() synthesizes a fixed mode from the
+ * inode type, so there is nowhere to record the requested bits and nothing that
+ * would reflect them. We therefore accept the call and discard the mode, the
+ * same way mgwfst_utimens() resolves but drops the access time.
+ *
+ * This is not cosmetic: rsync's do_mkstemp() does mkstemp() followed by
+ * fchmod(), and with --perms (implied by -a) it treats an fchmod failure as
+ * fatal -- it closes and unlinks the temp file and reports "mkstemp ... failed".
+ * With no .chmod handler the kernel returns -ENOSYS for the fchmod, so
+ * "rsync -a" could never land a file. Returning success here unblocks it (and
+ * any other "create temp, set perms, rename" writer such as install/cp -p).
+ */
+static int mgwfs_chmod(const char *path, mode_t mode, struct fuse_file_info *fi)
+{
+	int idx, ret=0;
+
+	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+	{
+		fprintf(ourSuper.logFile, "FUSE mgwfs_chmod(path='%s',mode=0%o)\n", path, mode);
+		fflush(ourSuper.logFile);
+	}
+	if ( !options.read_write )
+		return -EROFS;
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	if ( (idx = findInode(&ourSuper, FSYS_INDEX_ROOT, path)) <= 0 )
+	{
+		fprintf(ourSuper.logFile, "FUSE mgwfs_chmod() returned -ENOENT because '%s' could not be found\n", path);
+		fflush(ourSuper.logFile);
+		ret = -ENOENT;
+	}
+	/* No perms field on media; accept and ignore the requested mode. */
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	return ret;
+}
+
+/*
+ * int (*chown)(const char *, uid_t, gid_t, struct fuse_file_info *fi);
+ *
+ * Likewise there is no owner/group on media, and getattr() always reports the
+ * mounting user's uid/gid. We accept the call and discard the ids. uid/gid of
+ * (uid_t)-1 means "leave unchanged" per chown(2); since we store nothing, that
+ * distinction is moot, but returning success keeps "rsync -a" (which carries
+ * -o/-g) and similar tools from emitting failures for every file.
+ */
+static int mgwfs_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_info *fi)
+{
+	int idx, ret=0;
+
+	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+	{
+		fprintf(ourSuper.logFile, "FUSE mgwfs_chown(path='%s',uid=%d,gid=%d)\n", path, (int)uid, (int)gid);
+		fflush(ourSuper.logFile);
+	}
+	if ( !options.read_write )
+		return -EROFS;
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	if ( (idx = findInode(&ourSuper, FSYS_INDEX_ROOT, path)) <= 0 )
+	{
+		fprintf(ourSuper.logFile, "FUSE mgwfs_chown() returned -ENOENT because '%s' could not be found\n", path);
+		fflush(ourSuper.logFile);
+		ret = -ENOENT;
+	}
+	/* No owner/group field on media; accept and ignore the requested ids. */
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	return ret;
+}
+
 const struct fuse_operations mgwfs_oper =
 {
 	.init       = mgwfs_init,
@@ -1406,6 +1477,8 @@ const struct fuse_operations mgwfs_oper =
 	.lseek		= mgwfs_lseek,		// off_t (*lseek) (const char *, off_t off, int whence, struct fuse_file_info *);
 	.truncate	= mgwfs_truncate,	// int (*truncate) (const char *, off_t, struct fuse_file_info *fi);
 	.utimens	= mgwfst_utimens,	// int (*utimens) (const char *, const struct timespec tv[2], struct fuse_file_info *fi);
+	.chmod		= mgwfs_chmod,		// int (*chmod) (const char *, mode_t, struct fuse_file_info *fi);
+	.chown		= mgwfs_chown,		// int (*chown) (const char *, uid_t, gid_t, struct fuse_file_info *fi);
 #if 0
 	.fallocate	= mgwfs_fallocate,	// int (*fallocate) (const char *, int, off_t, off_t, struct fuse_file_info *);
 #endif
@@ -1414,8 +1487,6 @@ const struct fuse_operations mgwfs_oper =
 	.write_buf	= mgwfs_write_buf,	// int (*write_buf) (const char *, struct fuse_bufvec *buf, off_t off, struct fuse_file_info *);
 #endif
 #if 0	/* No support for these functions (yet; probably never) */
-	.chmod		= mgwfs_chmod,		// int (*chmod) (const char *, mode_t, struct fuse_file_info *fi);
-	.chown		= mgwfs_chown,		// int (*chown) (const char *, uid_t, gid_t, struct fuse_file_info *fi);
 	.mknod		= mgwfs_mknod,		// int (*mknod) (const char *, mode_t, dev_t);
 	.setxattr	= mgwfs_setxattr,	// int (*setxattr) (const char *, const char *, const char *, size_t, int);
 	.getxattr	= mgwfs_getxattr,	// int (*getxattr) (const char *, const char *, char *, size_t);

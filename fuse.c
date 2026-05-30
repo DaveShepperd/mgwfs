@@ -250,19 +250,19 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 		fi->fh = fhp->index;
 		retVal = 0;
 		retVal = fileOpen("FUSE mgwfs_open()", path, &ourSuper, fhp);
-		fhp->rwb.buffSize = inode->fsHeader.clusters*BYTES_PER_SECTOR;
-		fhp->rwb.buff = (uint8_t *)malloc(fhp->rwb.buffSize);
+		inode->rwb.buffSize = inode->fsHeader.clusters*BYTES_PER_SECTOR;
+		inode->rwb.buff = (uint8_t *)malloc(inode->rwb.buffSize);
 		/* Read the whole file into a local buffer */
-		fhp->rwb.buffErr = readWholeFile("FUSE mgwfs_open():", &ourSuper, fhp->rwb.buff, inode->fsHeader.size, inode->fsHeader.pointers[0]);
-		if ( fhp->rwb.buffErr >= 0 )
+		inode->rwb.buffErr = readWholeFile("FUSE mgwfs_open():", &ourSuper, inode->rwb.buff, inode->fsHeader.size, inode->fsHeader.pointers[0]);
+		if ( inode->rwb.buffErr >= 0 )
 		{
-			fhp->rwb.buffUsed = fhp->rwb.buffErr;
+			inode->rwb.buffUsed = inode->rwb.buffErr;
 			if ( (fi->flags&(O_WRONLY|O_RDWR)) )
 			{
 				if ( (fi->flags & O_TRUNC) )
-					fhp->rwb.buffUsed = 0;
+					inode->rwb.buffUsed = 0;
 				if ( (fi->flags & O_APPEND) )
-					fhp->rwb.buffOffset = fhp->rwb.buffUsed;
+					inode->rwb.buffOffset = inode->rwb.buffUsed;
 			}
 			if ((ourSuper.verbose&VERBOSE_FUSE_CMD))
 			{
@@ -271,16 +271,16 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 						,fhp->openFlags
 						,idx
 						,fhp->index
-						,fhp->rwb.buff
-						,fhp->rwb.buffUsed
-						,fhp->rwb.buffOffset
-						,fhp->rwb.buffSize
+						,inode->rwb.buff
+						,inode->rwb.buffUsed
+						,inode->rwb.buffOffset
+						,inode->rwb.buffSize
 						 );
 			}
 		}
 		else
 		{
-			fprintf(ourSuper.logFile, "FUSE mgwfs_open('%s') readFile() returned error %d.\n", path, fhp->rwb.buffErr );
+			fprintf(ourSuper.logFile, "FUSE mgwfs_open('%s') readFile() returned error %d.\n", path, inode->rwb.buffErr );
 		}
 	} while (0);
 	fflush(ourSuper.logFile);
@@ -403,8 +403,9 @@ static int mgwfs_read(const char *path, char *buf, size_t size, off_t offset,
 	do
 	{
 		size_t cpyAmt;
-
+		
 		fhp = getFuseFHidx(&ourSuper, fi->fh);
+		inode = ourSuper.inodeList[fhp->inode];
 		if ( !fhp )
 		{
 			fprintf(ourSuper.logFile, "FUSE mgwfs_read('%s', %ld, 0x%lX): not opened. Returned -EIO\n"
@@ -414,15 +415,15 @@ static int mgwfs_read(const char *path, char *buf, size_t size, off_t offset,
 					);
 			break;
 		}
-		if ( fhp->rwb.buffErr < 0 )
+		if ( inode->rwb.buffErr < 0 )
 		{
 			fprintf(ourSuper.logFile, "FUSE mgwfs_read('%s', %ld, 0x%lX): Found rwBuffErr=%d\n"
 					,path
 					,size
 					,offset
-					,fhp->rwb.buffErr
+					,inode->rwb.buffErr
 					);
-			retVal = fhp->rwb.buffErr;
+			retVal = inode->rwb.buffErr;
 			break;
 		}
 		inode = ourSuper.inodeList[fhp->inode];
@@ -441,22 +442,22 @@ static int mgwfs_read(const char *path, char *buf, size_t size, off_t offset,
 					,path
 					,size
 					,offset
-					,fhp->rwb.buffUsed
-					,fhp->rwb.buffOffset
-					,fhp->rwb.buffSize
-					,fhp->rwb.buffErr
+					,inode->rwb.buffUsed
+					,inode->rwb.buffOffset
+					,inode->rwb.buffSize
+					,inode->rwb.buffErr
 					);
 			fflush(ourSuper.logFile);
 		}
 		cpyAmt = 0;
-		if ( fhp->rwb.buffUsed > 0 )
+		if ( inode->rwb.buffUsed > 0 )
 		{
 			off_t adjOffset = offset;
 			cpyAmt = size;
-			if ( adjOffset > fhp->rwb.buffUsed )
-				adjOffset = fhp->rwb.buffUsed;
-			if ( cpyAmt + adjOffset > fhp->rwb.buffUsed )
-				cpyAmt = fhp->rwb.buffUsed-adjOffset;
+			if ( adjOffset > inode->rwb.buffUsed )
+				adjOffset = inode->rwb.buffUsed;
+			if ( cpyAmt + adjOffset > inode->rwb.buffUsed )
+				cpyAmt = inode->rwb.buffUsed-adjOffset;
 			if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 			{
 				fprintf(ourSuper.logFile, "FUSE mgwfs_read('%s', %ld, 0x%lX) cpyAmt=%ld, adjOffset=%ld, rwBuffUsed=%d\n",
@@ -465,12 +466,12 @@ static int mgwfs_read(const char *path, char *buf, size_t size, off_t offset,
 						offset,
 						cpyAmt,
 						adjOffset,
-						fhp->rwb.buffUsed );
+						inode->rwb.buffUsed );
 			}
 			if ( cpyAmt > 0 )
 			{
-				memcpy(buf, fhp->rwb.buff + adjOffset, cpyAmt);
-				fhp->rwb.buffOffset += cpyAmt;
+				memcpy(buf, inode->rwb.buff + adjOffset, cpyAmt);
+				inode->rwb.buffOffset += cpyAmt;
 			}
 		}
 		retVal = cpyAmt;
@@ -555,149 +556,159 @@ static int mgwfs_access(const char *path, int flags)
 	return idx ? 0 : -ENOENT;
 }
 
+/*
+ * Detach inode 'idx' from its parent directory, free its file-header sectors
+ * and data sectors back to the freemap, drop it from the inode list and mark
+ * the affected metadata (parent dir, index.sys, freemap.sys) dirty. The caller
+ * must hold rdMutex and must already have verified that idx is a valid, removable
+ * (non-directory) inode. Returns 0 on success or a negative errno.
+ */
+static int detachInode(MgwfsSuper_t *super, int idx, const char *path)
+{
+	MgwfsInode_t *parent, *prev, *curr, *next;
+	FsysRetPtr *rp, tmp;
+	IndexSys_t *indexPtr;
+	int ii, jj, verbLen=0;
+	char verbBuff[200];
+
+	curr = super->inodeList[idx];
+	// Need to remove the filename from the directory to which this file is listed
+	/* Assume no pointers */
+	parent = NULL;
+	prev = NULL;
+	next = NULL;
+	addToDirty("detachInode():", super,curr->idxParentInode);
+	/* Get pointer to previous inode if there is one */
+	if ( curr->idxPrevInode )
+		prev = super->inodeList[curr->idxPrevInode];
+	/* Get pointer to next inode if there is one */
+	if ( curr->idxNextInode )
+		next = super->inodeList[curr->idxNextInode];
+	/* If there's no previous, then point to the parent */
+	if ( !prev )
+		parent = super->inodeList[curr->idxParentInode];
+	/* If there's a next, then its previous gets our previous */
+	if ( next )
+		next->idxPrevInode = curr->idxPrevInode;
+	/* If there's a previous, then its next gets our next  */
+	if ( prev )
+		prev->idxNextInode = curr->idxNextInode;
+	else if ( parent )
+	{
+		/* If there's no previous, then get parent's child becomes our next */
+		parent->idxChildTop = curr->idxNextInode;
+	}
+	else
+	{
+		// FATAL! Check for fatal errror here. There has to always be a parent
+		fprintf(super->logFile, "detachInode('%s') returned -EIO because (inode %d) has no parent entry\n", path, idx);
+		fprintf(super->errFile, "detachInode('%s') returned -EIO because (inode %d) has no parent entry\n", path, idx);
+		return -EIO;
+	}
+	tmp.nblocks = 1;
+	// Need to free the sectors assigned to the file headers assigned to this file
+	indexPtr = super->indexSys+curr->inode_no;
+	if ( (super->verbose&VERBOSE_FUSE_CMD) )
+	{
+		verbLen = snprintf(verbBuff,sizeof(verbBuff), "detachInode('%s'): free sectors ",
+				path);
+	}
+	for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
+	{
+		if ( ((tmp.start = indexPtr->lba[ii])&FSYS_LBA_MASK) )
+		{
+			if ( verbLen )
+			{
+				verbLen += snprintf(verbBuff+verbLen,sizeof(verbBuff)-verbLen,
+								 " 0x%08X/%d",
+									tmp.start,
+									tmp.nblocks);
+			}
+			mgwfsFreeSectors(super,&tmp,FALSE);
+			// Need to mark the entries in index.sys as available
+			indexPtr->lba[ii] = FSYS_EMPTYLBA_BIT;
+		}
+	}
+	// Need to free the sectors assigned to this file
+	for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
+	{
+		rp = curr->fsHeader.pointers[ii];
+		for ( jj = 0; rp->nblocks && jj < FSYS_MAX_FHPTRS; ++jj, ++rp )
+		{
+			if ( verbLen )
+			{
+				verbLen += snprintf(verbBuff+verbLen,sizeof(verbBuff)-verbLen,
+								 " 0x%08X/%d",
+									rp->start,
+									rp->nblocks);
+			}
+			mgwfsFreeSectors(super, rp, TRUE);
+		}
+	}
+	if ( verbLen )
+		fprintf(super->logFile, "%s\n", verbBuff);
+	/* Keep the inode's own header-LBA copy consistent with the now-empty
+	 * index.sys slot (index.sys is rebuilt from inode->fhSectors). */
+	super->inodeList[idx] = NULL;
+	free(curr);
+	addToDirty("detachInode():", super,FSYS_INDEX_INDEX);
+	addToDirty("detachInode():", super,FSYS_INDEX_FREE);
+	return 0;
+}
+
 static int mgwfs_unlink(const char *path)
 {
-	int verbLen,retVal= -ENOENT, idx;
+	int retVal, idx;
 	MgwfsSuper_t *super = &ourSuper;
-	FsysRetPtr tmp;
-	IndexSys_t *indexPtr;
-	char verbBuff[200];
-	
-	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
-	do
+
+	if ( (super->verbose&VERBOSE_FUSE_CMD) )
 	{
-		MgwfsInode_t *parent, *prev, *curr, *next;
-		FsysRetPtr *rp;
-		int ii, jj;
-		
+		fprintf(super->logFile, "FUSE mgwfs_unlink('%s')\n", path );
+		fflush(super->logFile);
+	}
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	idx = findInode(&ourSuper,FSYS_INDEX_ROOT,path);
+	if ( !idx )
+	{
 		if ( (super->verbose&VERBOSE_FUSE_CMD) )
-		{
-			fprintf(super->logFile, "FUSE mgwfs_unlink('%s')\n", path );
-			fflush(super->logFile);
-		}
-		idx = findInode(&ourSuper,FSYS_INDEX_ROOT,path);
-		if ( !idx )
-		{
-			if ( (super->verbose&VERBOSE_FUSE_CMD) )
-				fprintf(super->logFile, "FUSE mgwfs_unlink('%s') returned ENOENT\n", path );
-			retVal = -ENOENT;
-			break;
-		}
-		curr = super->inodeList[idx];
-		if ( S_ISDIR(curr->mode) )
-		{
-			if ( (super->verbose&VERBOSE_FUSE_CMD) )
-				fprintf(super->logFile, "FUSE mgwfs_unlink() returned -EINVAL because '%s' (inode %d) is a directory\n", path, idx);
-			retVal = -EINVAL;
-			break;
-		}
-		// Need to remove the filename from the directory to which this file is listed
-		/* Assume no pointers */
-		parent = NULL;
-		prev = NULL;
-		next = NULL;
-		addToDirty(super,curr->idxParentInode);
-		/* Get pointer to previous inode if there is one */
-		if ( curr->idxPrevInode )
-			prev = super->inodeList[curr->idxPrevInode];
-		/* Get pointer to next inode if there is one */
-		if ( curr->idxNextInode )
-			next = super->inodeList[+curr->idxNextInode];
-		/* If there's no previous, then point to the parent */
-		if ( !prev )
-			parent = super->inodeList[curr->idxParentInode];
-		/* If there's a next, then its previous gets our previous */
-		if ( next )
-			next->idxPrevInode = curr->idxPrevInode;
-		/* If there's a previous, then its next gets our next  */
-		if ( prev )
-			prev->idxNextInode = curr->idxNextInode;
-		else if ( parent )
-		{
-			/* If there's no previous, then get parent's child becomes our next */
-			parent->idxChildTop = curr->idxNextInode;
-		}
-		else
-		{
-			// FATAL! Check for fatal errror here. There has to always be a parent 
-			fprintf(super->logFile, "FUSE mgwfs_unlink('%s') returned -EIO because (inode %d) has no parent entry\n", path, idx);
-			fprintf(super->errFile, "FUSE mgwfs_unlink('%s') returned -EIO because (inode %d) has no parent entry\n", path, idx);
-			retVal = -EIO;
-			break;
-		}
-		tmp.nblocks = 1;
-		// Need to free the sectors assigned to the file headers assigned to this file
-		indexPtr = super->indexSys+curr->inode_no;
-		verbLen = 0;
+			fprintf(super->logFile, "FUSE mgwfs_unlink('%s') returned ENOENT\n", path );
+		retVal = -ENOENT;
+	}
+	else if ( S_ISDIR(super->inodeList[idx]->mode) )
+	{
 		if ( (super->verbose&VERBOSE_FUSE_CMD) )
-		{
-			verbLen = snprintf(verbBuff,sizeof(verbBuff), "FUSE mgwfs_unlink('%s'): free sectors ",
-					path);
-		}
-		for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
-		{
-			if ( ((tmp.start = indexPtr->lba[ii])&FSYS_LBA_MASK) )
-			{
-				if ( verbLen )
-				{
-					verbLen += snprintf(verbBuff+verbLen,sizeof(verbBuff)-verbLen,
-									 " 0x%08X/%d",
-										tmp.start,
-										tmp.nblocks);
-				}
-				mgwfsFreeSectors(super,&tmp,FALSE);
-				// Need to mark the entries in index.sys as available
-				indexPtr->lba[ii] = FSYS_EMPTYLBA_BIT;
-			}
-		}
-		// Need to free the sectors assigned to this file
-		for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
-		{
-			rp = curr->fsHeader.pointers[ii];
-			for ( jj = 0; rp->nblocks && jj < FSYS_MAX_FHPTRS; ++jj, ++rp )
-			{
-				if ( verbLen )
-				{
-					verbLen += snprintf(verbBuff+verbLen,sizeof(verbBuff)-verbLen,
-									 " 0x%08X/%d",
-										rp->start,
-										rp->nblocks);
-				}
-				mgwfsFreeSectors(super, rp, TRUE);
-			}
-		}
-		if ( verbLen )
-			fprintf(super->logFile, "%s\n", verbBuff);
-		super->inodeList[idx] = NULL;
-		free(curr);
-		addToDirty(super,FSYS_INDEX_INDEX);
-		addToDirty(super,FSYS_INDEX_FREE);
-	} while ( 0 );
+			fprintf(super->logFile, "FUSE mgwfs_unlink() returned -EINVAL because '%s' (inode %d) is a directory\n", path, idx);
+		retVal = -EINVAL;
+	}
+	else
+	{
+		retVal = detachInode(super, idx, path);
+	}
 	fflush(super->logFile);
 	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	return retVal;
 }
 
-static off_t addToBuff(FuseFH_t *fhp, const char *path, off_t off)
+static off_t addToBuff(RwBuff_t *rwb, const char *path, off_t off)
 {
-	if ( off >= fhp->rwb.buffSize )
+	if ( off >= rwb->buffSize )
 	{
 		uint8_t *newPtr;
 		int sectors = (off+BYTES_PER_SECTOR-1)/BYTES_PER_SECTOR;
 		int bytes = sectors*BYTES_PER_SECTOR;
-		newPtr = (uint8_t *)realloc(fhp->rwb.buff, bytes);
+		newPtr = (uint8_t *)realloc(rwb->buff, bytes);
 		if ( !newPtr )
 		{
 			fprintf(ourSuper.logFile, "FUSE addToBuff(%s,0x%lX). Out of memory to allocate %d bytes.\n", path, off, bytes );
 			return -ENOMEM;
 		}
-		fhp->rwb.buff = newPtr;
-		fhp->rwb.buffSize = bytes;
-		memset(fhp->rwb.buff+fhp->rwb.buffUsed,0,fhp->rwb.buffSize-fhp->rwb.buffUsed);
+		rwb->buff = newPtr;
+		rwb->buffSize = bytes;
+		memset(rwb->buff+rwb->buffUsed,0,rwb->buffSize-rwb->buffUsed);
 	}
-	if ( off > fhp->rwb.buffUsed )
-		fhp->rwb.buffUsed = off;
-	fhp->rwb.buffOffset = off;
+	if ( off > rwb->buffUsed )
+		rwb->buffUsed = off;
+	rwb->buffOffset = off;
 	return off;
 }
 
@@ -740,23 +751,23 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 					,size
 					,offset
 					,fi->fh
-					,fhp->rwb.buff
-					,fhp->rwb.buffUsed
-					,fhp->rwb.buffOffset
-					,fhp->rwb.buffSize
+					,inode->rwb.buff
+					,inode->rwb.buffUsed
+					,inode->rwb.buffOffset
+					,inode->rwb.buffSize
 					);
 			fflush(ourSuper.logFile);
 		}
-		if ( size + offset > fhp->rwb.buffSize )
+		if ( size + offset > inode->rwb.buffSize )
 		{
-			off_t currOffset = fhp->rwb.buffOffset;
-			cpyAmt = addToBuff(fhp,path,offset+size);
+			off_t currOffset = inode->rwb.buffOffset;
+			cpyAmt = addToBuff(&inode->rwb,path,offset+size);
 			if ( cpyAmt < 0 )
 				break;
-			fhp->rwb.buffOffset = currOffset;
+			inode->rwb.buffOffset = currOffset;
 		}
 		cpyAmt = size;
-		memcpy(fhp->rwb.buff + fhp->rwb.buffOffset, buf, cpyAmt);
+		memcpy(inode->rwb.buff + inode->rwb.buffOffset, buf, cpyAmt);
 		if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_WRITES)) )
 		{
 			int idx, bcnt = cpyAmt;
@@ -770,13 +781,13 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 				fprintf(ourSuper.logFile, " %02X", buf[idx]);
 			fprintf(ourSuper.logFile,"%s at offset %ld\n"
 					,bcnt != cpyAmt ? "..." : ""
-					,fhp->rwb.buffOffset
+					,inode->rwb.buffOffset
 					);
 			fflush(ourSuper.logFile);
 		}
-		fhp->rwb.buffOffset += cpyAmt;
-		if ( fhp->rwb.buffOffset > fhp->rwb.buffUsed )
-			fhp->rwb.buffUsed = fhp->rwb.buffOffset;
+		inode->rwb.buffOffset += cpyAmt;
+		if ( inode->rwb.buffOffset > inode->rwb.buffUsed )
+			inode->rwb.buffUsed = inode->rwb.buffOffset;
 		if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 		{
 			fprintf(ourSuper.logFile, "FUSE mgwfs_write('%s',%p,%ld,0x%lX,%ld): After:  rwBuff=%p, rwBuffUsed=%d, rwBuffOffset=%ld, rwBuffSize=%d\n"
@@ -785,10 +796,10 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 					,size
 					,offset
 					,fi->fh
-					,fhp->rwb.buff
-					,fhp->rwb.buffUsed
-					,fhp->rwb.buffOffset
-					,fhp->rwb.buffSize
+					,inode->rwb.buff
+					,inode->rwb.buffUsed
+					,inode->rwb.buffOffset
+					,inode->rwb.buffSize
 					);
 			fflush(ourSuper.logFile);
 		}
@@ -812,16 +823,18 @@ static int mgwfs_flush(const char *path, struct fuse_file_info *fi)
 	fhp = getFuseFHidx(&ourSuper,fi->fh);
 	if ( fhp )
 	{
+		MgwfsInode_t *inode;
+		inode = ourSuper.inodeList[fhp->inode];
 		sts = fileFlush("mgwfs_flush()", &ourSuper, fhp);
 		if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 		{
 			fprintf(ourSuper.logFile, "FUSE mgwfs_flush('%s',%ld): rwBuff=%p, rwBuffUsed=%d, rwBuffOffset=%ld, rwBuffSize=%d\n"
 					,path
 					,fi->fh
-					,fhp->rwb.buff
-					,fhp->rwb.buffUsed
-					,fhp->rwb.buffOffset
-					,fhp->rwb.buffSize
+					,inode->rwb.buff
+					,inode->rwb.buffUsed
+					,inode->rwb.buffOffset
+					,inode->rwb.buffSize
 					);
 			fflush(ourSuper.logFile);
 		}
@@ -849,7 +862,47 @@ static void mgwfs_destroy(void *private_data)
 		fprintf(ourSuper.logFile, "FUSE mgwfs_destroy(), pd=%p, &ourSuper=%p\n", private_data, &ourSuper );
 		fflush(ourSuper.logFile);
 	}
-	mgwfs_fsync("/",0,NULL);
+	/* Flush any dirty metadata (e.g. headers whose mtime was changed via
+	 * utimens but never went through a file close) before we go away. */
+	if ( options.read_write )
+		updateAllMetaData("FUSE mgwfs_destroy()", &ourSuper);
+}
+
+/* Remove an inode from its parent directory's child list only (no sector
+ * freeing, the inode itself survives). Caller holds rdMutex and is responsible
+ * for marking the old parent dirty. */
+static void unlinkFromParent(MgwfsSuper_t *super, MgwfsInode_t *curr)
+{
+	MgwfsInode_t *prev=NULL, *next=NULL, *parent=NULL;
+
+	if ( curr->idxPrevInode )
+		prev = super->inodeList[curr->idxPrevInode];
+	if ( curr->idxNextInode )
+		next = super->inodeList[curr->idxNextInode];
+	if ( !prev )
+		parent = super->inodeList[curr->idxParentInode];
+	if ( next )
+		next->idxPrevInode = curr->idxPrevInode;
+	if ( prev )
+		prev->idxNextInode = curr->idxNextInode;
+	else if ( parent )
+		parent->idxChildTop = curr->idxNextInode;
+}
+
+/* Insert an inode at the top of a directory's child list (matching the order
+ * insertIntoDir() uses on create). Caller holds rdMutex and marks parent dirty. */
+static void insertIntoParent(MgwfsSuper_t *super, MgwfsInode_t *parent, MgwfsInode_t *child)
+{
+	child->idxParentInode = parent->inode_no;
+	child->idxPrevInode = 0;
+	child->idxNextInode = parent->idxChildTop;
+	if ( parent->idxChildTop )
+	{
+		MgwfsInode_t *first = super->inodeList[parent->idxChildTop];
+		if ( first )
+			first->idxPrevInode = child->inode_no;
+	}
+	parent->idxChildTop = child->inode_no;
 }
 
 // Flags can be one of:
@@ -857,12 +910,101 @@ static void mgwfs_destroy(void *private_data)
 //RENAME_EXCHANGE is set, both files must exist, and they are swapped
 static int mgwfs_rename (const char *oldName, const char *newName, unsigned int flags)
 {
-	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+	MgwfsSuper_t *super = &ourSuper;
+	int retVal = 0, oldIdx, newIdx, newParentIdx;
+	MgwfsInode_t *oldInode, *newParent;
+	char *parentPath = NULL;
+	const char *baseName, *slash;
+
+	if ( (super->verbose&VERBOSE_FUSE_CMD) )
 	{
-		fprintf(ourSuper.logFile, "FUSE mgwfs_rename('%s','%s',0x%X)\n", oldName, newName, flags );
-		fflush(ourSuper.logFile);
+		fprintf(super->logFile, "FUSE mgwfs_rename('%s','%s',0x%X)\n", oldName, newName, flags );
+		fflush(super->logFile);
 	}
-	return options.read_write ? -EPERM : -EEXIST;
+	if ( !options.read_write )
+		return -EROFS;
+#ifdef RENAME_EXCHANGE
+	if ( (flags & RENAME_EXCHANGE) )		/* atomic swap not supported */
+		return -ENOSYS;
+#endif
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	do
+	{
+		oldIdx = findInode(super, FSYS_INDEX_ROOT, oldName);
+		if ( oldIdx <= 0 )
+		{
+			retVal = -ENOENT;
+			break;
+		}
+		oldInode = super->inodeList[oldIdx];
+		/* If the target already exists, either reject (NOREPLACE) or remove it
+		 * so the new name is free. We don't support replacing a directory. */
+		newIdx = findInode(super, FSYS_INDEX_ROOT, newName);
+		if ( newIdx > 0 )
+		{
+#ifdef RENAME_NOREPLACE
+			if ( (flags & RENAME_NOREPLACE) )
+			{
+				retVal = -EEXIST;
+				break;
+			}
+#endif
+			if ( S_ISDIR(super->inodeList[newIdx]->mode) )
+			{
+				retVal = -EISDIR;
+				break;
+			}
+			if ( newIdx == oldIdx )		/* renaming onto itself: nothing to do */
+				break;
+			retVal = detachInode(super, newIdx, newName);
+			if ( retVal < 0 )
+				break;
+		}
+		/* Split newName into its parent directory path and final component. */
+		parentPath = strdup(newName);
+		if ( !parentPath )
+		{
+			retVal = -ENOMEM;
+			break;
+		}
+		slash = strrchr(newName, '/');
+		baseName = slash ? slash+1 : newName;
+		if ( !slash || slash == newName )
+			parentPath[1] = 0;			/* parent is the root "/" */
+		else
+			parentPath[slash - newName] = 0;
+		newParentIdx = findInode(super, FSYS_INDEX_ROOT, parentPath);
+		if ( newParentIdx <= 0 )
+		{
+			retVal = -ENOENT;
+			break;
+		}
+		newParent = super->inodeList[newParentIdx];
+		if ( !S_ISDIR(newParent->mode) )
+		{
+			retVal = -ENOTDIR;
+			break;
+		}
+		/* Detach from the old directory, rename, and attach to the new one. The
+		 * name lives only in the directory entries, so marking both directories
+		 * dirty is what makes the change persist. */
+		addToDirty("mgwfs_rename(): old parent", super, oldInode->idxParentInode);
+		unlinkFromParent(super, oldInode);
+		strncpy(oldInode->fileName, baseName, sizeof(oldInode->fileName)-1);
+		oldInode->fileName[sizeof(oldInode->fileName)-1] = 0;
+		oldInode->fnLen = strlen(oldInode->fileName);
+		insertIntoParent(super, newParent, oldInode);
+		addToDirty("mgwfs_rename(): new parent", super, newParent->inode_no);
+		/* A moved directory's synthesized ".." comes from idxParentInode, so it
+		 * must be repacked when reparented. */
+		if ( S_ISDIR(oldInode->mode) )
+			addToDirty("mgwfs_rename(): moved dir", super, oldInode->inode_no);
+		retVal = 0;
+	} while ( 0 );
+	free(parentPath);
+	fflush(super->logFile);
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	return retVal;
 }
 
 static int mgwfs_mkdir(const char *path, mode_t mode)
@@ -911,23 +1053,26 @@ static int mgwfs_create(const char *path, mode_t fMode, struct fuse_file_info *f
 
 static off_t moveOffset(const char *path, FuseFH_t *fhp, off_t off)
 {
+	MgwfsInode_t *inode;
+	
+	inode = ourSuper.inodeList[fhp->inode];
 	if ( off < 0 )
 		off = 0;
-	if ( off <= fhp->rwb.buffUsed )
+	if ( off <= inode->rwb.buffUsed )
 	{
-		fhp->rwb.buffOffset = off;
+		inode->rwb.buffOffset = off;
 		return off;
 	}
 	if ( !(fhp->openFlags & (O_RDWR | O_WRONLY)) )
 	{
 		/* read only, cannot go past EOF */
-		if ( off >= fhp->rwb.buffUsed )
-			off = fhp->rwb.buffUsed;
-		fhp->rwb.buffOffset = off;
+		if ( off >= inode->rwb.buffUsed )
+			off = inode->rwb.buffUsed;
+		inode->rwb.buffOffset = off;
 		return off;
 	}
 	/* r/w or wo, maybe add to end of file */
-	return addToBuff(fhp,path,off);
+	return addToBuff(&inode->rwb,path,off);
 }
 
 static off_t lseek_locked(const char *path, off_t off, int whence, struct fuse_file_info *fi)
@@ -954,8 +1099,10 @@ static off_t lseek_locked(const char *path, off_t off, int whence, struct fuse_f
 	if ( fi->fh )
 	{
 		FuseFH_t *fhp;
-
+		MgwfsInode_t *inode;
+		
 		fhp = getFuseFHidx(&ourSuper,fi->fh);
+		inode = ourSuper.inodeList[fhp->inode];
 		if ( fhp )
 		{
 			switch (whence)
@@ -965,12 +1112,12 @@ static off_t lseek_locked(const char *path, off_t off, int whence, struct fuse_f
 				break;
 
 			case SEEK_CUR:
-				newOff = fhp->rwb.buffOffset+off;
+				newOff = inode->rwb.buffOffset+off;
 				sts = moveOffset(path,fhp,newOff);
 				break;
 
 			case SEEK_END:
-				newOff = fhp->rwb.buffUsed+off;
+				newOff = inode->rwb.buffUsed+off;
 				sts = moveOffset(path,fhp,newOff);
 				break;
 				
@@ -1003,21 +1150,120 @@ static int mgwfs_truncate(const char *path, off_t offset, struct fuse_file_info 
 	if ( options.read_write && fi->fh )
 	{
 		FuseFH_t *fhp;
+		MgwfsInode_t *inode;
 		
 		LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 		fhp = getFuseFHidx(&ourSuper, fi->fh);
+		inode = ourSuper.inodeList[fhp->inode];
 		if ( (fhp->openFlags & (O_RDWR|O_WRONLY)) )
 		{
 			sts = moveOffset(path,fhp,offset);
 			if ( sts >= 0 )
 			{
-				fhp->rwb.buffUsed = offset;
-				fhp->rwb.buffOffset = offset;
+				inode->rwb.buffUsed = offset;
+				inode->rwb.buffOffset = offset;
 			}
 		}
 		UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	}
 	return sts;
+}
+
+/*
+  Comments from Claude which added this function:
+  
+  What I did
+
+  1. Added the real mgwfst_utimens definition (fuse.c, just above the mgwfs_oper table). It follows the same shape as mgwfs_getattr: verbose logging, read_write guard (returns -EROFS on a read-only mount), findInode lookup under
+  rdMutex, and the -ENOENT log message on a miss. It correctly handles UTIME_NOW, UTIME_OMIT, and a NULL tv, stores the resolved mtime into inode->fsHeader.mtime, and calls addToDirty(...) to schedule the header for write-back — same
+  mechanism every other mutator here uses.
+  2. Moved .utimens = mgwfst_utimens out of the #if 0 block so it's actually registered in the operations table.
+
+  Two caveats you should know about
+
+  These aren't bugs in the wiring — they're consequences of the current filesystem state, and both are honestly reflected in the code comments:
+
+  - No atime storage. agcfsys.h only has uint32_t ctime/mtime, so the access time (tv[0]) is resolved but then dropped. This matches getattr, which never fills st_atime. Nanoseconds are also truncated since the format holds whole
+  seconds only.
+  - updateAllMetaData() will clobber an explicit mtime. At mgwfs.c:1018 the flush path unconditionally does inode->fsHeader.mtime = time(NULL) for normal inodes. So once disk write-back actually works (writeFileHeader is still a stub
+  returning EIO), a touch -d '2001-01-01' file would persist as now rather than the requested time. Within a live mount it's fine — getattr reads the in-memory header directly, so stat reflects the set time immediately. But the
+  persisted value won't survive a flush of an explicit (non-now) timestamp.
+
+  If you want, I can make updateAllMetaData preserve an explicitly-set mtime (e.g. a small "mtime already set this round" flag, or a separate dirty reason that skips the time(NULL) stamp) so arbitrary timestamps round-trip correctly
+  once writeFileHeader is implemented.
+*/
+
+/*
+ * int (*utimens)(const char *, const struct timespec tv[2], struct fuse_file_info *fi);
+ *
+ * Modern replacement for the old clib-style utime() FUSE op. tv[0] is the
+ * access time, tv[1] is the modification time. Either tv_nsec field may be
+ * the special value UTIME_NOW (set to current time) or UTIME_OMIT (leave
+ * unchanged); when tv itself is NULL both stamps are set to "now" (the
+ * classic utime(path, NULL) / touch case).
+ *
+ * The on-disk format (agcfsys.h) keeps only a 32-bit mtime/ctime and has no
+ * atime field, so the access time is resolved but then discarded. getattr()
+ * likewise leaves st_atime zero, so the two stay consistent.
+ */
+static int mgwfst_utimens(const char *path, const struct timespec tv[2],
+						  struct fuse_file_info *fi)
+{
+	int idx, ret=0;
+	MgwfsInode_t *inode;
+
+	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+	{
+		fprintf(ourSuper.logFile, "FUSE mgwfst_utimens(path='%s')\n", path);
+		fflush(ourSuper.logFile);
+	}
+	if ( !options.read_write )
+		return -EROFS;
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	if ( (idx = findInode(&ourSuper, FSYS_INDEX_ROOT, path)) <= 0 )
+	{
+		fprintf(ourSuper.logFile, "FUSE mgwfst_utimens() returned -ENOENT because '%s' could not be found\n", path);
+		fflush(ourSuper.logFile);
+		ret = -ENOENT;
+	}
+	else
+	{
+		time_t now = time(NULL);	/* used for UTIME_NOW and a NULL tv */
+		time_t atime, mtime;
+
+		inode = ourSuper.inodeList[idx];
+
+		/* Resolve access time (tv[0]). No atime field on media, so it is
+		 * computed for completeness but ultimately dropped. */
+		if ( tv == NULL || tv[0].tv_nsec == UTIME_NOW )
+			atime = now;
+		else if ( tv[0].tv_nsec == UTIME_OMIT )
+			atime = (time_t)-1;		/* sentinel: leave unchanged */
+		else
+			atime = tv[0].tv_sec;
+		(void)atime;
+
+		/* Resolve modification time (tv[1]) and store it (nanoseconds are
+		 * truncated; the format only holds whole seconds). */
+		if ( tv == NULL || tv[1].tv_nsec == UTIME_NOW )
+			mtime = now;
+		else if ( tv[1].tv_nsec == UTIME_OMIT )
+			mtime = (time_t)-1;
+		else
+			mtime = tv[1].tv_sec;
+
+		if ( mtime != (time_t)-1 )
+		{
+			inode->fsHeader.mtime = (uint32_t)mtime;
+			/* Tell the flush path this is the time we want kept, so it
+			 * won't be overwritten with "now". */
+			inode->flags |= MGWFS_INODE_MTIME_SET;
+			/* Schedule the file header for write-back to media. */
+			addToDirty("mgwfst_utimens()", &ourSuper, idx);
+		}
+	}
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	return ret;
 }
 
 const struct fuse_operations mgwfs_oper =
@@ -1041,13 +1287,13 @@ const struct fuse_operations mgwfs_oper =
 	.create		= mgwfs_create,		// int (*create) (const char *, mode_t, struct fuse_file_info *);
 	.lseek		= mgwfs_lseek,		// off_t (*lseek) (const char *, off_t off, int whence, struct fuse_file_info *);
 	.truncate	= mgwfs_truncate,	// int (*truncate) (const char *, off_t, struct fuse_file_info *fi);
+	.utimens	= mgwfst_utimens,	// int (*utimens) (const char *, const struct timespec tv[2], struct fuse_file_info *fi);
 #if 0
 	.fallocate	= mgwfs_fallocate,	// int (*fallocate) (const char *, int, off_t, off_t, struct fuse_file_info *);
 #endif
 #if 0
 	.read_buf	= mgwfs_read_buf,	// int (*read_buf) (const char *, struct fuse_bufvec **bufp, size_t size, off_t off, struct fuse_file_info *);
 	.write_buf	= mgwfs_write_buf,	// int (*write_buf) (const char *, struct fuse_bufvec *buf, off_t off, struct fuse_file_info *);
-	.utimens	= mgwfst_utimens,	// int (*utimens) (const char *, const struct timespec tv[2], struct fuse_file_info *fi);
 #endif
 #if 0	/* No support for these functions (yet; probably never) */
 	.chmod		= mgwfs_chmod,		// int (*chmod) (const char *, mode_t, struct fuse_file_info *fi);

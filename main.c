@@ -162,6 +162,13 @@ int main(int argc, char *argv[])
 		ourSuper.logFile = stdout;
 		ourSuper.errFile = stderr;
 	}
+	if ( options.copies > FSYS_MAX_ALTS )
+	{
+		fprintf(stderr,"--copies '%ld' can only be 1 through %d\n", options.copies, FSYS_MAX_ALTS);
+		return 1;
+	}
+	if ( !options.copies )
+		options.copies = 1;
 	if ( options.verbose )
 	{
 		printf("%s version %s\n", argv[0], VERSION);
@@ -205,7 +212,7 @@ int main(int argc, char *argv[])
 				fprintf(ourSuper.errFile,"Unable to stat '%s': %s\n", ourSuper.imageName, strerror(errno));
 				break;
 			}
-			ourSuper.fd = open(ourSuper.imageName, O_RDONLY);
+			ourSuper.fd = open(ourSuper.imageName, options.read_write ? O_RDWR : O_RDONLY);
 			if ( ourSuper.fd < 0 )
 			{
 				fprintf(ourSuper.errFile, "Error opening the '%s': %s\n", ourSuper.imageName, strerror(errno));

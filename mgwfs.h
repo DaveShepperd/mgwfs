@@ -39,6 +39,23 @@ typedef uint32_t sector_t;
 
 #define n_elts(x) (int)(sizeof(x)/sizeof(x[0]))
 
+typedef struct
+{
+	uint8_t *buff;
+	uint32_t buffSize;	/* Size of read/write buffer (will be multiple of sector size) */
+	off_t buffOffset;		/* Offset of last byte read from or written to rwBuff */
+	uint32_t buffUsed;	/* Total bytes used in rdBuff */
+	int buffErr;
+} RwBuff_t;
+
+typedef struct
+{
+	int index;				/* Our index into the list */
+	uint32_t inode;			/* file ID of open file */
+	int instances;			/* number of times this file is open() */
+	int openFlags;			/* flags passed in on open() */
+} FuseFH_t;
+
 typedef struct MgwfsInode_t
 {
 	int idxParentInode;				/* Index to parent directory's inode (i.e. super->inodeList[xx]) */
@@ -51,8 +68,13 @@ typedef struct MgwfsInode_t
 	mode_t mode;					/* file's mode */
 	int fnLen;						/* Filename length */
 	FsysHeader fsHeader;			/* File's header */
+	RwBuff_t rwb;
+	uint32_t flags;					/* MGWFS_INODE_* bits (see below) */
 	char fileName[MGWFS_FILENAME_MAXLEN+1];	/* File's name */
 } MgwfsInode_t;
+
+/* Bits for MgwfsInode_t.flags */
+#define MGWFS_INODE_MTIME_SET (1<<0)	/* mtime was set explicitly (e.g. via utimens); do not restamp on flush */
 
 enum
 {
@@ -100,24 +122,6 @@ enum
 #define VERBOSE_LOCKS		(1<<VERB_BIT_LOCKS)		/* Show details of lock/unlock */
 #endif
 #define VERBOSE_ANY			((1<<VERB_BIT_MAX)-1)	/* Any verbose bit */
-
-typedef struct
-{
-	uint8_t *buff;
-	uint32_t buffSize;	/* Size of read/write buffer (will be multiple of sector size) */
-	off_t buffOffset;		/* Offset of last byte read from or written to rwBuff */
-	uint32_t buffUsed;	/* Total bytes used in rdBuff */
-	int buffErr;
-} RwBuff_t;
-
-typedef struct
-{
-	int index;				/* Our index into the list */
-	uint32_t inode;			/* file ID of open file */
-	int instances;			/* number of times this file is open() */
-	int openFlags;			/* flags passed in on open() */
-	RwBuff_t rwb;
-} FuseFH_t;
 
 #define MAX_DIRTY_INODE 100
 
@@ -275,10 +279,11 @@ extern void freeFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx);
 extern int writeHomeBlock(MgwfsSuper_t *super);
 extern int writeIndexSys(MgwfsSuper_t *super);
 extern int writeFreeMapSys(MgwfsSuper_t *super);
+extern int writeFileHeader(MgwfsSuper_t *super, MgwfsInode_t *inode);
 extern int writeDirectory(MgwfsSuper_t *super, MgwfsInode_t *dir);
 extern MgwfsInode_t *findUnusedInode(MgwfsSuper_t *super);
 extern int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper);
-extern void addToDirty(MgwfsSuper_t *super, int idx);
+extern void addToDirty(const char *title, MgwfsSuper_t *super, int idx);
 
 /* functions in freemap.c */
 #define FREEM_FLAG_MARK_DIRTY	(0x01)

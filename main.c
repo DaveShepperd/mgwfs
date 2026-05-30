@@ -203,6 +203,8 @@ int main(int argc, char *argv[])
 			if ( FSYS_MAX_ALTS != 3 )
 			{
 				fprintf(ourSuper.errFile, "FSYS_MAX_ALTS=%d. Application has to be built with it set to 3.\n", FSYS_MAX_ALTS);
+				if (ourSuper.errFile != stderr)
+					fprintf(stderr, "FSYS_MAX_ALTS=%d. Application has to be built with it set to 3.\n", FSYS_MAX_ALTS);
 				ret = -1;
 				break;
 			}
@@ -210,12 +212,16 @@ int main(int argc, char *argv[])
 			if ( ret < 0 )
 			{
 				fprintf(ourSuper.errFile,"Unable to stat '%s': %s\n", ourSuper.imageName, strerror(errno));
+				if (ourSuper.errFile != stderr)
+					fprintf(stderr,"Unable to stat '%s': %s\n", ourSuper.imageName, strerror(errno));
 				break;
 			}
 			ourSuper.fd = open(ourSuper.imageName, options.read_write ? O_RDWR : O_RDONLY);
 			if ( ourSuper.fd < 0 )
 			{
 				fprintf(ourSuper.errFile, "Error opening the '%s': %s\n", ourSuper.imageName, strerror(errno));
+				if (ourSuper.errFile != stderr)
+					fprintf(stderr, "Error opening the '%s': %s\n", ourSuper.imageName, strerror(errno));
 				ret = -1;
 				break;
 			}
@@ -231,6 +237,8 @@ int main(int argc, char *argv[])
 			if ( (sizeof(bootSect) != read(ourSuper.fd,&bootSect,sizeof(bootSect))) )
 			{
 				fprintf(ourSuper.errFile, "Failed to read boot sector: %s\n", strerror(errno));
+				if (ourSuper.errFile != stderr)
+					fprintf(stderr, "Failed to read boot sector: %s\n", strerror(errno));
 				ret = -2;
 				break;
 			}
@@ -275,6 +283,8 @@ int main(int argc, char *argv[])
 				if ( readWholeFile("index.sys", &ourSuper, (uint8_t*)ourSuper.indexSys, ourSuper.indexSysHdr.size, ourSuper.indexSysHdr.pointers[0]) < 0 )
 				{
 					fprintf(ourSuper.errFile,"Failed to read index.sys file\n");
+					if (ourSuper.errFile != stderr)
+						fprintf(stderr,"Failed to read index.sys file\n");
 					ret = -1;
 					break;
 				}
@@ -296,6 +306,8 @@ int main(int argc, char *argv[])
 			if ( !ourSuper.inodeList )
 			{
 				fprintf(ourSuper.errFile, "Sorry. Not enough memory to hold %d inode pointers (%ld bytes)\n", ourSuper.numInodesAvailable, sizeof(MgwfsInode_t *) * ourSuper.numInodesAvailable);
+				if (ourSuper.errFile != stderr)
+					fprintf(stderr, "Sorry. Not enough memory to hold %d inode pointers (%ld bytes)\n", ourSuper.numInodesAvailable, sizeof(MgwfsInode_t *) * ourSuper.numInodesAvailable);
 				close(ourSuper.fd);
 				return 1;
 			}
@@ -305,6 +317,9 @@ int main(int argc, char *argv[])
 			{
 				fprintf(ourSuper.errFile, "Sorry. Not enough memory to hold an inode for index.sys (%ld bytes)\n",
 						sizeof(MgwfsInode_t));
+				if (ourSuper.errFile != stderr)
+					fprintf(stderr, "Sorry. Not enough memory to hold an inode for index.sys (%ld bytes)\n",
+							sizeof(MgwfsInode_t));
 				close(ourSuper.fd);
 				return 1;
 			}
@@ -352,7 +367,16 @@ int main(int argc, char *argv[])
 				if ( getFileHeader(tmpName, &ourSuper, FSYS_ID_HEADER, lbas, &inode->fsHeader) )
 				{
 					inode->inode_no = ii;
-					inode->mode = (inode->fsHeader.type == FSYS_TYPE_DIR) ? S_IFDIR|0555 : S_IFREG|0444;
+					if ( (inode->fsHeader.type == FSYS_TYPE_DIR) )
+					{
+						inode->mode = S_IFDIR | 0555;
+						if ( !inode->fsHeader.mtime )
+							inode->fsHeader.mtime = ourSuper.homeBlk.mtime;
+						if ( !inode->fsHeader.ctime )
+							inode->fsHeader.ctime = ourSuper.homeBlk.ctime;
+					}
+					else
+						inode->mode =  S_IFREG | 0444;
 					if ( (ourSuper.verbose&VERBOSE_HEADERS) )
 						displayFileHeader(ourSuper.logFile, &inode->fsHeader, 1 | (ourSuper.verbose & VERBOSE_RETPTRS));
 					else if ( (ourSuper.verbose&VERBOSE_MINIMUM) )

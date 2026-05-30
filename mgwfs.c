@@ -269,6 +269,8 @@ int getHomeBlock(MgwfsSuper_t *ourSuper, off64_t maxHbSector, off64_t diskSizeIn
 					for (jj=ii; jj < FSYS_MAX_ALTS; ++jj)
 						ourSuper->homeLbas[jj] = 0;
 					fprintf(ourSuper->errFile, "Failed to find Home block %d\n", ii);
+					if (ourSuper->errFile != stderr)
+						fprintf(stderr, "Failed to find Home block %d\n", ii);
 					break;
 				}
 			}
@@ -1025,19 +1027,17 @@ int fileRename(const char *title, MgwfsSuper_t *ourSuper, const char *oldPath, c
 	return -EIO;
 }
 
-//int fileRead(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp, off_t offset, size_t bytes)
-//{
-//	if ( (fhp->openFlags&(O_WRONLY|O_RDWR)) )
-//		return -EIO;
-//	return 0;
-//}
-
-static void markInodeUnused(MgwfsSuper_t *ourSuper, MgwfsInode_t **inode)
+static void markInodeUnused(MgwfsSuper_t *ourSuper, MgwfsInode_t **inodePtr)
 {
-	int idx = (*inode)->inode_no;
-	free(*inode);
+	MgwfsInode_t *inode = *inodePtr;
+	int idx = inode->inode_no;
+	RwBuff_t *rwb = &inode->rwb;
+	if ( rwb->buff )
+		free(rwb->buff);
+	memset(rwb,0,sizeof(RwBuff_t));
+	free(inode);
 	ourSuper->inodeList[idx] = NULL;
-	*inode = NULL;
+	*inodePtr = NULL;
 }
 
 MgwfsInode_t *findUnusedInode(MgwfsSuper_t *ourSuper)
@@ -1161,7 +1161,10 @@ int fileCreate(const char *title, const char *path,  MgwfsSuper_t *ourSuper)
 		fprintf(ourSuper->logFile, "%s: fileCreate(%s) failed to find empty inode, returned ENOSPC\n", title, path);
 		return -ENOSPC;
 	}
-	sLen = strlen(path)+2;
+	if ( inode->rwb.buff )
+		free(inode->rwb.buff);
+	memset(&inode->rwb,0,sizeof(inode->rwb));
+	sLen = strlen(path) + 2;
 	tmpDir = (char *)malloc(sLen);
 	strncpy(tmpDir,path,sLen);
 	nameOnly = strrchr(path,'/');

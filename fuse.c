@@ -1009,23 +1009,141 @@ static int mgwfs_rename (const char *oldName, const char *newName, unsigned int 
 
 static int mgwfs_mkdir(const char *path, mode_t mode)
 {
-	int sts = options.read_write ? -EPERM : -EIO;
-	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+	MgwfsSuper_t *super = &ourSuper;
+	int retVal = 0, idx, parentIdx;
+	MgwfsInode_t *inode, *parent;
+	char *parentPath = NULL;
+	const char *baseName, *slash;
+
+	if ( (super->verbose&VERBOSE_FUSE_CMD) )
 	{
-		fprintf(ourSuper.logFile, "FUSE mgwfs_mkdir('%s',0x%X), sts=%d\n", path, mode, sts);
-		fflush(ourSuper.logFile);
+		fprintf(super->logFile, "FUSE mgwfs_mkdir('%s',0x%X)\n", path, mode);
+		fflush(super->logFile);
 	}
-	return sts;
+	if ( !options.read_write )
+		return -EROFS;
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	do
+	{
+		/* Reject if anything already lives at this path. */
+		idx = findInode(super, FSYS_INDEX_ROOT, path);
+		if ( idx > 0 )
+		{
+			retVal = -EEXIST;
+			break;
+		}
+		/* Split path into its parent directory and the final component. */
+		parentPath = strdup(path);
+		if ( !parentPath )
+		{
+			retVal = -ENOMEM;
+			break;
+		}
+		slash = strrchr(path, '/');
+		baseName = slash ? slash+1 : path;
+		if ( !slash || slash == path )
+			parentPath[1] = 0;			/* parent is the root "/" */
+		else
+			parentPath[slash - path] = 0;
+		if ( !*baseName )				/* trailing slash, no name to create */
+		{
+			retVal = -EINVAL;
+			break;
+		}
+		if ( strlen(baseName) > MGWFS_FILENAME_MAXLEN )
+		{
+			retVal = -ENAMETOOLONG;
+			break;
+		}
+		parentIdx = findInode(super, FSYS_INDEX_ROOT, parentPath);
+		if ( parentIdx <= 0 )
+		{
+			retVal = -ENOENT;
+			break;
+		}
+		parent = super->inodeList[parentIdx];
+		if ( !S_ISDIR(parent->mode) )
+		{
+			retVal = -ENOTDIR;
+			break;
+		}
+		/* Allocate a fresh inode and turn it into an (empty) directory. */
+		inode = findUnusedInode(super);
+		if ( !inode )
+		{
+			retVal = -ENOSPC;
+			break;
+		}
+		strncpy(inode->fileName, baseName, sizeof(inode->fileName)-1);
+		inode->fileName[sizeof(inode->fileName)-1] = 0;
+		inode->fnLen = strlen(inode->fileName);
+		inode->fsHeader.type = FSYS_TYPE_DIR;
+		inode->mode = S_IFDIR | 0775;
+		/* Link it into its parent, then schedule both the new directory (so its
+		 * synthesized "." / ".." entries get packed and written, which also
+		 * allocates its header and data sectors) and the parent (whose contents
+		 * now list the new name) for write-back. */
+		insertIntoParent(super, parent, inode);
+		addToDirty("mgwfs_mkdir(): parent", super, parentIdx);
+		addToDirty("mgwfs_mkdir(): new dir", super, inode->inode_no);
+		retVal = 0;
+	} while ( 0 );
+	free(parentPath);
+	if ( (super->verbose&VERBOSE_FUSE_CMD) )
+		fprintf(super->logFile, "FUSE mgwfs_mkdir('%s') returned %d\n", path, retVal);
+	fflush(super->logFile);
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	return retVal;
 }
 
 static int mgwfs_rmdir(const char *path)
 {
-	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+	MgwfsSuper_t *super = &ourSuper;
+	int retVal = 0, idx;
+	MgwfsInode_t *inode;
+
+	if ( (super->verbose&VERBOSE_FUSE_CMD) )
 	{
-		fprintf(ourSuper.logFile, "FUSE mgwfs_rmdir('%s')\n", path);
-		fflush(ourSuper.logFile);
+		fprintf(super->logFile, "FUSE mgwfs_rmdir('%s')\n", path);
+		fflush(super->logFile);
 	}
-	return options.read_write ? -EPERM : -EIO;
+	if ( !options.read_write )
+		return -EROFS;
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	do
+	{
+		idx = findInode(super, FSYS_INDEX_ROOT, path);
+		if ( idx <= 0 )
+		{
+			retVal = -ENOENT;
+			break;
+		}
+		if ( idx == FSYS_INDEX_ROOT )		/* the root directory can't be removed */
+		{
+			retVal = -EBUSY;
+			break;
+		}
+		inode = super->inodeList[idx];
+		if ( !S_ISDIR(inode->mode) )
+		{
+			retVal = -ENOTDIR;
+			break;
+		}
+		if ( inode->idxChildTop )			/* directory still has entries */
+		{
+			retVal = -ENOTEMPTY;
+			break;
+		}
+		/* detachInode unlinks it from the parent's child list, frees its
+		 * file-header and data sectors back to the freemap and drops the inode,
+		 * marking the parent, index.sys and freemap.sys dirty. */
+		retVal = detachInode(super, idx, path);
+	} while ( 0 );
+	if ( (super->verbose&VERBOSE_FUSE_CMD) )
+		fprintf(super->logFile, "FUSE mgwfs_rmdir('%s') returned %d\n", path, retVal);
+	fflush(super->logFile);
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	return retVal;
 }
 
 static int mgwfs_create(const char *path, mode_t fMode, struct fuse_file_info *fi)

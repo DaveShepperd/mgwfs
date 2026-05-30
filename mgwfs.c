@@ -905,6 +905,12 @@ int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper)
 		IndexSys_t *fhLBAs;
 		
 		inode = ourSuper->inodeList[inodeIdx];
+		/* The slot may have been freed after it was marked dirty (e.g. rmdir
+		 * removes a directory that an earlier child-removal had already flagged).
+		 * Its now-empty entry is persisted when index.sys is rebuilt below, so
+		 * there's nothing to write back here; skip it rather than deref NULL. */
+		if ( !inode )
+			continue;
 		switch (inodeIdx)
 		{
 		case FSYS_INDEX_INDEX:
@@ -948,9 +954,11 @@ int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper)
 			inode->flags &= ~MGWFS_INODE_MTIME_SET;
 		else
 			inode->fsHeader.mtime = time(NULL);
-		if ( !inode->rwb.buff && inode->idxChildTop )
+		if ( !inode->rwb.buff && inode->fsHeader.type == FSYS_TYPE_DIR )
 		{
-			/* Pack the directory contents into rwb.buff for write-back. */
+			/* Pack the directory contents into rwb.buff for write-back. This
+			 * covers empty directories too (idxChildTop == 0), e.g. a freshly
+			 * created one, so their "." / ".." entries get laid down on media. */
 			sts = writeDirectory(ourSuper, inode);
 			if ( sts < 0 )
 				break;
@@ -1136,8 +1144,9 @@ int fileCreate(const char *title, const char *path,  MgwfsSuper_t *ourSuper)
 	if ( !nameOnly )
 		nameOnly = path;
 	else
-		++path;
-	strncpy(inode->fileName,path,sizeof(inode->fileName));
+		++nameOnly;					/* step past the '/' to the bare filename */
+	strncpy(inode->fileName,nameOnly,sizeof(inode->fileName)-1);
+	inode->fileName[sizeof(inode->fileName)-1] = 0;
 	/* A freshly allocated header is FSYS_TYPE_EMPTY (0); mark it a plain file
 	 * so it both reads back as a regular file (main.c derives st_mode from
 	 * this) and isn't mistaken for an unused header. */
@@ -1935,11 +1944,14 @@ int writeDirectory(MgwfsSuper_t *super, MgwfsInode_t *dir)
 	siz = (3+4) + 2*sizeof(uint32_t);
 	nxt = dir->idxChildTop;
 	top = super->inodeList[dir->inode_no];
-	do
+	/* An empty directory has no children (idxChildTop == 0); it still gets the
+	 * two synthesized ".." / "." entries sized above, so just skip the walk. */
+	while ( nxt )
 	{
 		child = super->inodeList[nxt];
 		siz += sizeof(uint32_t) + strlen(child->fileName)+1;
-	} while ( (nxt = child->idxNextInode) );
+		nxt = child->idxNextInode;
+	}
 	/* writeWholeFile() writes whole sectors out of this buffer, so round the
 	 * allocation up to a sector and zero it; the slack becomes clean padding
 	 * rather than an over-read of adjacent heap. */
@@ -1957,11 +1969,12 @@ int writeDirectory(MgwfsSuper_t *super, MgwfsInode_t *dir)
 	ptr = insertFilenameIntoDir(ptr, dir->idxParentInode, "..");
 	ptr = insertFilenameIntoDir(ptr, dir->inode_no, ".");
 	nxt = dir->idxChildTop;
-	do
+	while ( nxt )
 	{
 		child = super->inodeList[nxt];
 		ptr = insertFilenameIntoDir(ptr, nxt, child->fileName);
-	} while ( (nxt = child->idxNextInode) );
+		nxt = child->idxNextInode;
+	}
 	dir->rwb.buffUsed = ptr - dir->rwb.buff;
 	dir->rwb.buffOffset = dir->rwb.buffUsed;
 	/* The directory is packed after updateAllMetaData() ran its size = buffUsed

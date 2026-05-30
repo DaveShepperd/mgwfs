@@ -951,6 +951,10 @@ int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper)
 			inode->rwb.buffSize = ourSuper->numInodesAvailable * (sizeof(IndexSys_t));
 			inode->rwb.buffUsed = ii * sizeof(IndexSys_t);
 			inode->rwb.buffOffset = inode->rwb.buffUsed;
+			/* The index grew/shrank with numInodesUsed, so its header size must
+			 * track it; otherwise readWholeFile() reads a stale length on the
+			 * next mount and silently drops the newest inode entries. */
+			inode->fsHeader.size = inode->rwb.buffUsed;
 			break;
 		case FSYS_INDEX_FREE:
 			inode->rwb.buff = ourSuper->freeMap.rwBuff.buff;
@@ -1807,7 +1811,7 @@ static FuseFH_t *getNewFuseFHidx(MgwfsSuper_t *ourSuper)
 	
 	if ( (fhp=ourSuper->fuseFHs) )
 	{
-		for (idx=0; idx < ourSuper->numFuseFHs; ++fhp)
+		for (idx=0; idx < ourSuper->numFuseFHs; ++idx, ++fhp)
 		{
 			if ( !fhp->index )
 			{

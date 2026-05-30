@@ -311,11 +311,34 @@ int main(int argc, char *argv[])
 			memcpy(&inode->fsHeader, &ourSuper.indexSysHdr, sizeof(FsysHeader));
 			*inodePtr++ = inode;
 			ret = 0;
+			/*
+			 * index.sys is a dense array of per-inode header LBAs, terminated by
+			 * the first all-empty entry. We load it into inodeList[] with these
+			 * invariants, which the write path (findUnusedInode/updateAllMetaData)
+			 * depends on:
+			 *   - numInodesUsed is the HIGH-WATER MARK (index of the first empty
+			 *     entry), not a count of live inodes. The index.sys writer emits
+			 *     entries [0,numInodesUsed); the next mount stops at the same zero.
+			 *   - A deleted slot (FSYS_EMPTYLBA_BIT) is left NULL so it reads as a
+			 *     reusable hole. The writer re-emits EMPTY_BIT for a NULL slot
+			 *     (never a 0, which would truncate the index here on remount).
+			 *   - Slots at and beyond the high-water mark stay NULL (calloc'd),
+			 *     i.e. free. Crucially we do not park a placeholder inode in the
+			 *     sentinel slot, or allocation would skip it and open a gap.
+			 */
 			for (ii=1; ii < ourSuper.numInodesAvailable; ++ii)
 			{
 				char tmpName[32];
 				IndexSys_t *lbas;
-				
+
+				lbas = ourSuper.indexSys + ii;
+				if ( !lbas->lba[0] )
+				{
+					ourSuper.numInodesUsed = ii;	/* high-water end of the index */
+					break;
+				}
+				if ( (lbas->lba[0] & FSYS_EMPTYLBA_BIT) )
+					continue;						/* deleted slot: leave NULL (reusable hole) */
 				inode = (MgwfsInode_t *)calloc(1,sizeof(MgwfsInode_t));
 				if ( !inode )
 				{
@@ -324,37 +347,34 @@ int main(int argc, char *argv[])
 					close(ourSuper.fd);
 					return 1;
 				}
-				*inodePtr++ = inode;
-				lbas = ourSuper.indexSys + ii;
-				if ( !lbas->lba[0] )
-					break;
+				ourSuper.inodeList[ii] = inode;
 				snprintf(tmpName,sizeof(tmpName),"Inode %d", ii);
-				if ( !(lbas->lba[0] & FSYS_EMPTYLBA_BIT) )
+				if ( getFileHeader(tmpName, &ourSuper, FSYS_ID_HEADER, lbas, &inode->fsHeader) )
 				{
-					if ( getFileHeader(tmpName, &ourSuper, FSYS_ID_HEADER, lbas, &inode->fsHeader) )
-					{
-						inode->inode_no = ii;
-						inode->mode = (inode->fsHeader.type == FSYS_TYPE_DIR) ? S_IFDIR|0555 : S_IFREG|0444;
-						if ( (ourSuper.verbose&VERBOSE_HEADERS) )
-							displayFileHeader(ourSuper.logFile, &inode->fsHeader, 1 | (ourSuper.verbose & VERBOSE_RETPTRS));
-						else if ( (ourSuper.verbose&VERBOSE_MINIMUM) )
-							fprintf(ourSuper.logFile, "Loaded file header (inode) %4d, lbas: 0x%08X 0x%08X 0x%08X. Type=0x%X (%s)\n",
-								   ii,
-								   lbas->lba[0], lbas->lba[1], lbas->lba[2],
-								   inode->fsHeader.type,
-								   S_ISDIR(inode->mode) ? "DIR":"REG");
-						memcpy(inode->fhSectors,lbas,FSYS_MAX_ALTS*sizeof(uint32_t));
-						++ourSuper.numInodesUsed;
-					}
-					else
-					{
-						ret = -1;
-						break;
-					}
+					inode->inode_no = ii;
+					inode->mode = (inode->fsHeader.type == FSYS_TYPE_DIR) ? S_IFDIR|0555 : S_IFREG|0444;
+					if ( (ourSuper.verbose&VERBOSE_HEADERS) )
+						displayFileHeader(ourSuper.logFile, &inode->fsHeader, 1 | (ourSuper.verbose & VERBOSE_RETPTRS));
+					else if ( (ourSuper.verbose&VERBOSE_MINIMUM) )
+						fprintf(ourSuper.logFile, "Loaded file header (inode) %4d, lbas: 0x%08X 0x%08X 0x%08X. Type=0x%X (%s)\n",
+							   ii,
+							   lbas->lba[0], lbas->lba[1], lbas->lba[2],
+							   inode->fsHeader.type,
+							   S_ISDIR(inode->mode) ? "DIR":"REG");
+					memcpy(inode->fhSectors,lbas,FSYS_MAX_ALTS*sizeof(uint32_t));
+				}
+				else
+				{
+					ret = -1;
+					break;
 				}
 			}
 			if ( ret < 0 )
 				break;
+			/* A completely full index (no empty sentinel encountered) means the
+			 * whole table is in use. */
+			if ( ii >= ourSuper.numInodesAvailable )
+				ourSuper.numInodesUsed = ourSuper.numInodesAvailable;
 			if ( (ourSuper.verbose&VERBOSE_MINIMUM) )
 			{
 				fprintf(ourSuper.logFile, "Inode info: inode size: %ld, inodesAvailable: %d, inodesUsed: %d\n", sizeof(MgwfsInode_t), ourSuper.numInodesAvailable, ourSuper.numInodesUsed);

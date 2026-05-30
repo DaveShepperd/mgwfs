@@ -24,6 +24,7 @@
 #include <stddef.h>
 #include <linux/magic.h>
 #include <sys/vfs.h>
+#include <sys/ioctl.h>
 #include <assert.h>
 #include <ctype.h>
 #if !NO_MUTEXES
@@ -174,6 +175,8 @@ typedef struct MgwfsSuper_t
 	FuseFH_t *fuseFHs;		/* list of fuse open files */
 	int numFuseFHs;			/* number of items available in fuseFHs */
 } MgwfsSuper_t;
+
+#include "mgwfs_ioctl.h"
 
 #if !NO_MUTEXES
 extern void mgwfs_destroy_mutex(void);

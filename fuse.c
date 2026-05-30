@@ -1149,7 +1149,7 @@ static int mgwfs_rmdir(const char *path)
 static int mgwfs_create(const char *path, mode_t fMode, struct fuse_file_info *fi)
 {
 	int idx, sts=0;
-	idx = fileCreate("mgwfs_open()", path, &ourSuper);
+	idx = fileCreate("mgwfs_create()", path, &ourSuper);
 	if ( idx < 0 )
 		sts = idx;
 	else
@@ -1455,6 +1455,50 @@ static int mgwfs_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_
 	return ret;
 }
 
+static int mgwfs_ioctl(const char *path, int cmd, void *arg,
+					   struct fuse_file_info *fi, unsigned int flags, void *data)
+{
+	int sts = 0;
+
+	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
+	{
+		fprintf(ourSuper.logFile, "FUSE mgwfs_ioctl('%s', cmd=0x%08X, flags=0x%X)\n", path, cmd, flags);
+		fflush(ourSuper.logFile);
+	}
+	/* We don't support the 32-bit-on-64-bit compat path. */
+	if ( (flags & FUSE_IOCTL_COMPAT) )
+		return -ENOSYS;
+	LOCK_IT("rdMutex", &ourSuper, &rdMutex);
+	switch (cmd)
+	{
+	case MGWFS_IOC_GETSTATS:
+		{
+			MgwfsIoctlStats_t *st = (MgwfsIoctlStats_t *)data;
+			st->sectorsFree = ourSuper.freeMap.sectorsFree;
+			st->sectorsUsed = ourSuper.freeMap.sectorsUsed;
+			st->sectorsLost = ourSuper.freeMap.sectorsLost;
+			st->freeMapEntriesUsed = ourSuper.freeMap.freeMapEntriesUsed;
+			st->freeMapEntriesAvail = ourSuper.freeMap.freeMapEntriesAvail;
+			st->numInodesUsed = ourSuper.numInodesUsed;
+			st->numInodesAvailable = ourSuper.numInodesAvailable;
+			st->numDirtyInodes = ourSuper.numDirtyInodes;
+			st->verbose = ourSuper.verbose;
+		}
+		break;
+	case MGWFS_IOC_GETVERBOSE:
+		*(uint32_t *)data = ourSuper.verbose;
+		break;
+	case MGWFS_IOC_SETVERBOSE:
+		ourSuper.verbose = *(uint32_t *)data;
+		break;
+	default:
+		sts = -ENOTTY;
+		break;
+	}
+	UNLOCK_IT("rdMutex", &ourSuper, &rdMutex);
+	return sts;
+}
+
 const struct fuse_operations mgwfs_oper =
 {
 	.init       = mgwfs_init,
@@ -1479,6 +1523,7 @@ const struct fuse_operations mgwfs_oper =
 	.utimens	= mgwfst_utimens,	// int (*utimens) (const char *, const struct timespec tv[2], struct fuse_file_info *fi);
 	.chmod		= mgwfs_chmod,		// int (*chmod) (const char *, mode_t, struct fuse_file_info *fi);
 	.chown		= mgwfs_chown,		// int (*chown) (const char *, uid_t, gid_t, struct fuse_file_info *fi);
+	.ioctl		= mgwfs_ioctl,		// int (*ioctl) (const char *, unsigned int cmd, void *arg, struct fuse_file_info *, unsigned int flags, void *data);
 #if 0
 	.fallocate	= mgwfs_fallocate,	// int (*fallocate) (const char *, int, off_t, off_t, struct fuse_file_info *);
 #endif
@@ -1502,8 +1547,6 @@ const struct fuse_operations mgwfs_oper =
 		     struct flock *);
 	int (*bmap) (const char *, size_t blocksize, uint64_t *idx);
 
-	int (*ioctl) (const char *, unsigned int cmd, void *arg,
-		      struct fuse_file_info *, unsigned int flags, void *data);
 	int (*poll) (const char *, struct fuse_file_info *,
 		     struct fuse_pollhandle *ph, unsigned *reventsp);
 	int (*flock) (const char *, struct fuse_file_info *, int op);

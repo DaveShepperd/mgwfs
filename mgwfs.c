@@ -1963,9 +1963,14 @@ int writeDirectory(MgwfsSuper_t *super, MgwfsInode_t *dir)
 	uint8_t *ptr;
 
 	/* Size the buffer: the two synthesized entries (".." and ".") plus one
-	 * entry per child. Each entry is a 5 byte fixed part (3 byte inode index,
-	 * generation, name length) plus the NUL-terminated name. */
-	siz = (3+4) + 2*sizeof(uint32_t);
+	 * entry per child. Each on-disk entry (see insertFilenameIntoDir()) is a
+	 * 5 byte fixed part -- 3 byte inode index, 1 byte generation, 1 byte name
+	 * length -- followed by the name and a trailing NUL, i.e. 5 + namelen + 1.
+	 * Counting the fixed part as a single 4 byte word here under-sized every
+	 * entry by one byte; near a sector boundary the packed contents then ran
+	 * past the rounded-up allocation and corrupted the heap. */
+#define DIR_ENTRY_BYTES(namelen) (5 + (namelen) + 1)
+	siz = DIR_ENTRY_BYTES(2) + DIR_ENTRY_BYTES(1);	/* ".." and "." */
 	nxt = dir->idxChildTop;
 	top = super->inodeList[dir->inode_no];
 	/* An empty directory has no children (idxChildTop == 0); it still gets the
@@ -1973,9 +1978,10 @@ int writeDirectory(MgwfsSuper_t *super, MgwfsInode_t *dir)
 	while ( nxt )
 	{
 		child = super->inodeList[nxt];
-		siz += sizeof(uint32_t) + strlen(child->fileName)+1;
+		siz += DIR_ENTRY_BYTES(strlen(child->fileName));
 		nxt = child->idxNextInode;
 	}
+#undef DIR_ENTRY_BYTES
 	/* writeWholeFile() writes whole sectors out of this buffer, so round the
 	 * allocation up to a sector and zero it; the slack becomes clean padding
 	 * rather than an over-read of adjacent heap. */

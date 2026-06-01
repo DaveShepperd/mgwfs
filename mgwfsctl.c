@@ -19,7 +19,7 @@
 #include <unistd.h>
 #include <inttypes.h>
 
-#include "mgwfs_ioctl.h"
+#include "mgwfsctl.h"
 
 static const char *Prog = "mgwfsctl";
 
@@ -31,15 +31,18 @@ static void usage(FILE *fp)
 		"  existing file or directory inside the mount point.\n"
 		"\n"
 		"Commands:\n"
-		"  stats <path>          print live filesystem statistics\n"
-		"  getverbose <path>     print the current verbose flags (hex)\n"
-		"  setverbose <path> <v> set the verbose flags; <v> may be decimal, 0x.. hex, or 0.. octal\n"
+		"  stats <path>                print live filesystem statistics\n"
+		"  getverbose <path>           print the current verbose flags (hex)\n"
+		"  setverbose <path> <v>       set the verbose flags; <v> may be decimal, 0x.. hex, or 0.. octal\n"
+		"  setboot <path> [<v>]        set the file pointed to by 'path' to boot image 'v' (v can be 0, 1, 2 or 3, defaults to 0)\n"
 		"\n"
 		"Examples:\n"
 		"  %s stats /mnt/mgwfs\n"
 		"  %s getverbose /mnt/mgwfs/.\n"
 		"  %s setverbose /mnt/mgwfs 0x40000\n"
-		, Prog, Prog, Prog, Prog);
+		"  %s setboot /mnt/mgwfs/FOO/bar\n"
+		"  %s setboot /mnt/mgwfs/SOMEWHERE/rainbow 1\n"
+		, Prog, Prog, Prog, Prog, Prog, Prog);
 }
 
 /* Open a path inside the mount. O_RDONLY is enough; the ioctl does the work. */
@@ -65,7 +68,11 @@ static int doStats(const char *path)
 		return 1;
 	}
 	close(fd);
-	printf("sectorsFree         : %" PRIu32 "\n", st.sectorsFree);
+	printf("hbMajor             : %" PRIu16 "\n", st.hbMajor);
+	printf("hbMinor             : %" PRIu16 "\n", st.hbMinor);
+	printf("hbSize              : %" PRIu16 "\n", st.hbSize);
+	printf("maxAlts             : %" PRIu16 "\n", st.maxAlts);
+	printf("defExtend           : %" PRIu32 "\n", st.defExtend);
 	printf("sectorsUsed         : %" PRIu32 "\n", st.sectorsUsed);
 	printf("sectorsLost         : %" PRIu32 "\n", st.sectorsLost);
 	printf("freeMapEntriesUsed  : %" PRId32 "\n", st.freeMapEntriesUsed);
@@ -74,6 +81,21 @@ static int doStats(const char *path)
 	printf("numInodesAvailable  : %" PRId32 "\n", st.numInodesAvailable);
 	printf("numDirtyInodes      : %" PRId32 "\n", st.numDirtyInodes);
 	printf("verbose             : 0x%08" PRIx32 "\n", st.verbose);
+	if ( st.hbMajor == 1 && st.hbMinor < 3 )
+		printf("Version 1.%d filesystem has boot hardcoded to CODE/vmunix\n", st.hbMinor);
+	else 
+	{
+		if ( st.hbMajor == 1 && st.hbMinor < 6 )
+		{
+			printf("Boot file           : '%s'\n", st.bootFiles[0]);
+		}
+		else
+		{
+			int ii;
+			for ( ii = 0; ii < MAX_NUM_BOOT_FILES; ++ii )
+				printf("Boot file %d       : '%s'\n", ii, st.bootFiles[ii]);
+		}
+	}
 	return 0;
 }
 
@@ -123,6 +145,51 @@ static int doSetVerbose(const char *path, const char *valStr)
 	return 0;
 }
 
+static int doSetBoot(const char *path, int bootNum)
+{
+	int fd;
+	MgwfsIoctlStats_t st;
+
+	errno = 0;
+	fd = openPath(path);
+	if ( fd < 0 )
+		return 1;
+	memset(&st, 0, sizeof(st));
+	if ( ioctl(fd, MGWFS_IOC_GETSTATS, &st) < 0 )
+	{
+		fprintf(stderr, "%s: MGWFS_IOC_GETSTATS on '%s' failed: %s\n", Prog, path, strerror(errno));
+		close(fd);
+		return 1;
+	}
+	if ( st.hbMajor == 1 && st.hbMinor < 3 )
+	{
+		fprintf(stderr,"%s: Setting of boot file not supported in filesystem earlier than version 1.3. Boot image is hardcoded to CODE/vmunix\n", Prog);
+		close(fd);
+		return 1;
+	}
+	if ( st.hbMajor == 1 && st.hbMinor < 7 && bootNum )
+	{
+		fprintf(stderr,"%s: Setting of boot file other than entry 0 not supported in filesystem earlier than version 1.7.\n", Prog);
+		close(fd);
+		return 1;
+	}
+	if ( ioctl(fd, MGWFS_IOC_SETBOOT0 + bootNum, "") < 0 )
+	{
+		int bad = errno;
+		fprintf(stderr, "%s: MGWFS_IOC_SETBOOT on '%s' failed: (%d) %s\n", Prog, path, errno, strerror(errno));
+		if ( bad == EINVAL )
+			fprintf(stderr,"%s: Setting of boot file not supported in filesystem earlier than version 1.3. Boot image is hardcoded to CODE/vmunix\n", Prog);
+		close(fd);
+		return 1;
+	}
+	close(fd);
+	if ( st.hbMajor == 1 && st.hbMinor >= 7 )
+		printf("Boot file entry %" PRIx32 " set to '%s'\n", bootNum, path);
+	else
+		printf("Boot file '%s' set\n", path);
+	return 0;
+}
+
 int main(int argc, char *argv[])
 {
 	const char *cmd;
@@ -153,6 +220,22 @@ int main(int argc, char *argv[])
 			return 1;
 		}
 		return doSetVerbose(argv[2], argv[3]);
+	}
+	if ( !strcmp(cmd, "setboot") )
+	{
+		int bootNum=0;
+		if ( argc > 3 )
+		{
+			char *endp = NULL;
+			bootNum = strtol(argv[3],&endp,0);
+			if ( !endp || *endp || bootNum < 0 || bootNum > 3 )
+			{
+				fprintf(stderr,"Boot number can only be 0, 1, 2 or 3: %s\n", argv[3]);
+				usage(stderr);
+				return 1;
+			}
+		}
+		return doSetBoot(argv[2], bootNum);
 	}
 	fprintf(stderr, "%s: unknown command '%s'\n", Prog, cmd);
 	usage(stderr);

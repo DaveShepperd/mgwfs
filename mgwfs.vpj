@@ -269,6 +269,7 @@
 			<F N="fuse.c"/>
 			<F N="main.c"/>
 			<F N="mgwfs.c"/>
+			<F N="mgwfsctl.c"/>
 		</Folder>
 		<Folder
 			Name="Header Files"
@@ -276,6 +277,7 @@
 			GUID="{E0B97497-F35E-4448-9094-D8BC9DF607DC}">
 			<F N="agcfsys.h"/>
 			<F N="mgwfs.h"/>
+			<F N="mgwfsctl.h"/>
 			<F N="walk.sh"/>
 		</Folder>
 		<Folder
@@ -293,6 +295,7 @@
 			<F
 				N="Makefile"
 				Type="Makefile"/>
+			<F N="README.md"/>
 			<F N="theory-of-op.txt"/>
 		</Folder>
 	</Files>

@@ -12,19 +12,6 @@
 
 #include "mgwfs.h"
 
-#if 0
-static void clearDirty(MgwfsSuper_t *super)
-{
-	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
-	{
-		fprintf(ourSuper.logFile, "FUSE clearDirty(). Writing back to disk %d inodes\n", super->numDirtyInodes);
-		fflush(ourSuper.logFile);
-	}
-	updateAllMetaData("FUSE clearDirty()",ourSuper);
-	super->numDirtyInodes = 0;
-}
-#endif
-
 #if !NO_MUTEXES
 static pthread_mutex_t rdMutex = PTHREAD_MUTEX_INITIALIZER;
 
@@ -184,14 +171,6 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 	
 	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 		fprintf(ourSuper.logFile, "FUSE mgwfs_open(path='%s',fi->fh=%ld, fi->flags=0x%X)\n", path, fi->fh, fi->flags);
-#if 0
-	if ( !options.read_write && (fi->flags & (O_RDWR | O_TRUNC | O_APPEND | O_WRONLY | O_CREAT )) )
-	{
-		fprintf(ourSuper.logFile, "FUSE mgwfs_open() returned -EACCESS because '%s' is mounted read-only.\n", path);
-		fflush(ourSuper.logFile);
-		return -EACCES;
-	}
-#endif
 	do
 	{
 		LOCK_IT("rdMutex",&ourSuper,&rdMutex);
@@ -287,110 +266,6 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	return retVal;
 }
-
-#if 0
-static int readLocked(const char *path, char *buf, size_t size, off_t offset,
-		      struct fuse_file_info *fi)
-{
-	MgwfsInode_t *inode;
-	FuseFH_t lclFhp, *fhp=NULL;
-	int cpyAmt= -EIO;
-
-	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
-	{
-		fprintf(ourSuper.logFile, "FUSE readLocked(path='%s',buf=%p,size=%ld,offset=%ld, fi->fh=%ld\n", path, buf,size,offset,fi->fh);
-		fflush(ourSuper.logFile);
-	}
-	do
-	{
-		if ( !fi->fh )
-		{
-			int idx;
-			/* Didn't do an open, so just lookup the file and read it locally */
-			idx = findInode(&ourSuper,FSYS_INDEX_ROOT,path);
-			if (!idx)
-			{
-				fprintf(ourSuper.logFile, "FUSE readLocked() returned -ENOENT because '%s' could not be found\n", path);
-				cpyAmt = -ENOENT;
-				break;
-			}
-			inode = ourSuper.inodeList[idx];
-			if ( S_ISDIR(inode->mode) )
-			{
-				fprintf(ourSuper.logFile, "FUSE readLocked() returned -EINVAL because '%s' (inode %d) is a directory\n", path, idx);
-				cpyAmt = -EINVAL;
-				break;
-			}
-			fhp = &lclFhp;
-			memset(fhp,0,sizeof(lclFhp));
-			fhp->index = 1;
-			fhp->inode = idx;
-			fhp->instances = 1;
-			fhp->openFlags = O_RDONLY;
-		}
-		else
-		{
-			fhp = getFuseFHidx(&ourSuper,fi->fh);
-			inode = ourSuper.inodeList[fhp->inode];
-		}
-		if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
-		{
-			fprintf(ourSuper.logFile, "FUSE readLocked('%s'): fhp=%s, fhp->readAmt=%d, offset=%ld, bsize=%d\n"
-					,path
-					,fhp != &lclFhp ? "allocated":"local"
-					,fhp->rwBuffUsed
-					,fhp->rwBuffOffset
-					,fhp->rwBuffSize
-					);
-			fflush(ourSuper.logFile);
-		}
-		if ( offset >= inode->fsHeader.size )
-		{
-			fhp->rwBuffOffset = offset;
-			cpyAmt = 0;
-			break;
-		}
-		if ( !fhp->rwBuffUsed || !fhp->rwBuff || fhp->rwBuffSize < inode->fsHeader.size )
-		{
-			if ( fhp->rwBuff )
-				free(fhp->rwBuff);
-			fhp->rwBuffSize = inode->fsHeader.size;
-			fhp->rwBuff = (uint8_t *)malloc(inode->fsHeader.size);
-			/* Read the whole file into a local buffer */
-			fhp->rwBuffUsed = readFile("FUSE readLocked():", &ourSuper, fhp->rwBuff, inode->fsHeader.size, inode->fsHeader.pointers[0]);
-			if ( fhp->rwBuffUsed < 0 )
-			{
-				fprintf(ourSuper.logFile, "FUSE readLocked('%s') readFile() returned error %d. offset=%ld\n", path, fhp->rwBuffUsed, offset );
-				cpyAmt = fhp->rwBuffUsed;
-				break;
-			}
-		}
-		if ( fhp->rwBuffUsed > 0 )
-		{
-			cpyAmt = size;
-			if ( cpyAmt+offset > (off_t)inode->fsHeader.size )
-				cpyAmt = inode->fsHeader.size-offset;
-			if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
-			{
-				fprintf(ourSuper.logFile, "FUSE readLocked('%s') copying %d bytes. offset=%ld, readAmt=%d\n", path, cpyAmt, offset, fhp->rwBuffUsed );
-			}
-			memcpy(buf,fhp->rwBuff+offset,cpyAmt);
-			fhp->rwBuffOffset += size;
-		}
-		else
-		{
-			fprintf(ourSuper.logFile, "FUSE readLocked('%s') readFile() failed with %d\n", path, fhp->rwBuffUsed );
-		}
-		if ( fhp == &lclFhp && fhp->rwBuff )
-		{
-			free(fhp->rwBuff);
-			fhp->rwBuff = NULL;
-		}
-	} while (0);
-	fflush(ourSuper.logFile);
-	return cpyAmt;
-}
-#endif
 
 static int mgwfs_read(const char *path, char *buf, size_t size, off_t offset,
 		      struct fuse_file_info *fi)
@@ -645,6 +520,31 @@ static int detachInode(MgwfsSuper_t *super, int idx, const char *path)
 			mgwfsFreeSectors(super, rp, TRUE);
 		}
 	}
+	for (ii=0; ii < MAX_NUM_BOOT_FILES; ++ii)
+	{
+		if ( super->bootIndicies[ii] == curr->inode_no )
+		{
+			IndexSys_t *ip;
+			super->bootIndicies[ii] = 0;
+			switch (ii)
+			{
+			case 0:
+				ip = (IndexSys_t *)super->homeBlk.boot;
+				break;
+			case 1:
+				ip = (IndexSys_t *)super->homeBlk.boot1;
+				break;
+			case 2:
+				ip = (IndexSys_t *)super->homeBlk.boot2;
+				break;
+			case 3:
+				ip = (IndexSys_t *)super->homeBlk.boot3;
+				break;
+			}
+			memset(ip,0,sizeof(IndexSys_t));
+			super->specialDirtys |= SPECIAL_DIRTY_HOME;
+		}
+	}
 	if ( verbLen )
 		fprintf(super->logFile, "%s\n", verbBuff);
 	/* Keep the inode's own header-LBA copy consistent with the now-empty
@@ -718,13 +618,6 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 	FuseFH_t *fhp=NULL;
 	int cpyAmt= -EIO;
 	
-#if 0
-	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
-	{
-		fprintf(ourSuper.logFile, "FUSE mgwfs_write('%s',%p,%ld,0x%lX,%ld)\n", path, buf, size, offset, fi->fh );
-		fflush(ourSuper.logFile);
-	}
-#endif
 	do
 	{
 		LOCK_IT("rdMutex",&ourSuper,&rdMutex);
@@ -852,7 +745,9 @@ static int mgwfs_fsync(const char *path, int arg, struct fuse_file_info *fi)
 		fprintf(ourSuper.logFile, "FUSE mgwfs_fsync(path='%s', fi->fh=%ld\n", path, fi->fh );
 		fflush(ourSuper.logFile);
 	}
-	return -EIO;
+	if ( options.read_write )
+		updateAllMetaData("FUSE mgwfs_fsync()", &ourSuper);
+	return 0;
 }
 
 static void mgwfs_destroy(void *private_data)
@@ -1455,25 +1350,57 @@ static int mgwfs_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_
 	return ret;
 }
 
+#define FILO_MAX_ENTRIES (16)
+
+static void buildBootFNPath(char *dst, int maxLen, MgwfsInode_t *inode)
+{
+	MgwfsInode_t *filo[FILO_MAX_ENTRIES];
+	int len=0, depth=0;
+	
+	while ( depth < FILO_MAX_ENTRIES )
+	{
+		filo[depth] = inode;
+		++depth;
+		if ( inode->idxParentInode == FSYS_INDEX_ROOT )
+			break;
+		inode = ourSuper.inodeList[inode->idxParentInode];
+	}
+	if ( depth >= FILO_MAX_ENTRIES )
+		len += snprintf(dst+len,maxLen-len,"... /");
+	while ( depth > 0 )
+	{
+		--depth;
+		inode = filo[depth];
+		len += snprintf(dst+len, maxLen-len, "%s%s", inode->fileName, S_ISDIR(inode->mode) ? "/":"");
+	}
+}
+
 static int mgwfs_ioctl(const char *path, int cmd, void *arg,
 					   struct fuse_file_info *fi, unsigned int flags, void *data)
 {
-	int sts = 0;
-
+	int idx, ii, sts = 0;
+	MgwfsInode_t *inode;
+	static const char Title[] = "mgwfs_ioctl";
+	
 	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 	{
-		fprintf(ourSuper.logFile, "FUSE mgwfs_ioctl('%s', cmd=0x%08X, flags=0x%X)\n", path, cmd, flags);
+		fprintf(ourSuper.logFile, "FUSE %s('%s', cmd=0x%08X, flags=0x%X)\n", Title, path, cmd, flags);
 		fflush(ourSuper.logFile);
 	}
 	/* We don't support the 32-bit-on-64-bit compat path. */
 	if ( (flags & FUSE_IOCTL_COMPAT) )
-		return -ENOSYS;
+		return -ENXIO;
 	LOCK_IT("rdMutex", &ourSuper, &rdMutex);
 	switch (cmd)
 	{
 	case MGWFS_IOC_GETSTATS:
 		{
 			MgwfsIoctlStats_t *st = (MgwfsIoctlStats_t *)data;
+			st->hbMajor = ourSuper.homeBlk.hb_major;
+			st->hbMinor = ourSuper.homeBlk.hb_minor;
+			st->hbSize = ourSuper.homeBlk.hb_size;
+			st->maxAlts = ourSuper.homeBlk.maxalts;
+			st->defExtend = ourSuper.homeBlk.def_extend;
 			st->sectorsFree = ourSuper.freeMap.sectorsFree;
 			st->sectorsUsed = ourSuper.freeMap.sectorsUsed;
 			st->sectorsLost = ourSuper.freeMap.sectorsLost;
@@ -1483,6 +1410,19 @@ static int mgwfs_ioctl(const char *path, int cmd, void *arg,
 			st->numInodesAvailable = ourSuper.numInodesAvailable;
 			st->numDirtyInodes = ourSuper.numDirtyInodes;
 			st->verbose = ourSuper.verbose;
+			memset(st->bootFiles, 0, sizeof(st->bootFiles));
+			if ( ourSuper.homeBlk.hb_major > 1 || ( ourSuper.homeBlk.hb_major == 1 && ourSuper.homeBlk.hb_minor >= 3 ) )
+			{
+				for (ii=0; ii < ourSuper.numInodesUsed; ++ii)
+				{
+					inode = ourSuper.inodeList[ii];
+					if ( inode && (inode->flags&MGWFS_INODE_ANY_BOOT) )
+					{
+						int bootIdx = (inode->flags>>MGWFS_INODE_BOOT_IDX)&MGWFS_INODE_BOOT_MASK;
+						buildBootFNPath(st->bootFiles[bootIdx], MAX_BOOT_FN_PATH-1, inode);
+					}
+				}
+			}
 		}
 		break;
 	case MGWFS_IOC_GETVERBOSE:
@@ -1491,11 +1431,70 @@ static int mgwfs_ioctl(const char *path, int cmd, void *arg,
 	case MGWFS_IOC_SETVERBOSE:
 		ourSuper.verbose = *(uint32_t *)data;
 		break;
+	case MGWFS_IOC_SETBOOT0:
+	case MGWFS_IOC_SETBOOT1:
+	case MGWFS_IOC_SETBOOT2:
+	case MGWFS_IOC_SETBOOT3:
+		if ( !options.read_write )
+		{
+			sts = -EROFS;
+			break;
+		}
+		if ( ourSuper.homeBlk.hb_major > 1 || ( ourSuper.homeBlk.hb_major == 1 && ourSuper.homeBlk.hb_minor >= 3 ) )
+		{
+			if ( (idx = findInode(&ourSuper, FSYS_INDEX_ROOT, path)) <= 0 )
+			{
+				fprintf(ourSuper.logFile, "FUSE %s(): boot set returned -ENOENT because '%s' could not be found\n", Title, path);
+				fflush(ourSuper.logFile);
+				sts = -ENOENT;
+				break;
+			}
+			inode = ourSuper.inodeList[idx];
+			cmd -= MGWFS_IOC_SETBOOT0;
+			if ( cmd && ourSuper.homeBlk.hb_major == 1 && (ourSuper.homeBlk.hb_minor < 6) )
+			{
+				fprintf(ourSuper.logFile, "FUSE %s(): boot set of '%s' returned -EINVAL because homeblock version of 1.%d is < 1.6\n",
+						Title, path, ourSuper.homeBlk.hb_minor);
+				fflush(ourSuper.logFile);
+				sts = -EINVAL;
+				break;
+			}
+			if ( ourSuper.bootIndicies[cmd] )
+			{
+				MgwfsInode_t *tmpInode;
+				tmpInode = ourSuper.inodeList[ourSuper.bootIndicies[cmd]];
+				tmpInode->flags &= ~(MGWFS_INODE_ANY_BOOT|(MGWFS_INODE_BOOT_MASK<<MGWFS_INODE_BOOT_IDX));
+			}
+			inode->flags &= ~(MGWFS_INODE_ANY_BOOT|(MGWFS_INODE_BOOT_MASK<<MGWFS_INODE_BOOT_IDX));
+			inode->flags |= (MGWFS_INODE_ANY_BOOT|(cmd<<MGWFS_INODE_BOOT_IDX));
+			ourSuper.bootIndicies[cmd] = inode->inode_no;
+			switch (cmd)
+			{
+			case 0:
+				memcpy(ourSuper.homeBlk.boot, inode->fhSectors.lba, sizeof(IndexSys_t));
+				break;
+			case 1:
+				memcpy(ourSuper.homeBlk.boot1, inode->fhSectors.lba, sizeof(IndexSys_t));
+				break;
+			case 2:
+				memcpy(ourSuper.homeBlk.boot2, inode->fhSectors.lba, sizeof(IndexSys_t));
+				break;
+			case 3:
+				memcpy(ourSuper.homeBlk.boot3, inode->fhSectors.lba, sizeof(IndexSys_t));
+				break;
+			}
+			ourSuper.specialDirtys |= SPECIAL_DIRTY_HOME;
+			break;
+		}
+		sts = -EINVAL;
+		break;
 	default:
-		sts = -ENOTTY;
+		sts = -EINVAL;
 		break;
 	}
 	UNLOCK_IT("rdMutex", &ourSuper, &rdMutex);
+	if ( (ourSuper.specialDirtys&SPECIAL_DIRTY_HOME) )
+		updateAllMetaData(Title, &ourSuper);
 	return sts;
 }
 
@@ -1526,8 +1525,6 @@ const struct fuse_operations mgwfs_oper =
 	.ioctl		= mgwfs_ioctl,		// int (*ioctl) (const char *, unsigned int cmd, void *arg, struct fuse_file_info *, unsigned int flags, void *data);
 #if 0
 	.fallocate	= mgwfs_fallocate,	// int (*fallocate) (const char *, int, off_t, off_t, struct fuse_file_info *);
-#endif
-#if 0
 	.read_buf	= mgwfs_read_buf,	// int (*read_buf) (const char *, struct fuse_bufvec **bufp, size_t size, off_t off, struct fuse_file_info *);
 	.write_buf	= mgwfs_write_buf,	// int (*write_buf) (const char *, struct fuse_bufvec *buf, off_t off, struct fuse_file_info *);
 #endif

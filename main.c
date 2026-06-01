@@ -195,7 +195,7 @@ int main(int argc, char *argv[])
 		}
 		do
 		{
-			int fLim;
+			int fLim, chkForBootFiles=0;
 			struct stat st;
 			off64_t maxHb;
 			off64_t sizeInSectors;
@@ -263,10 +263,24 @@ int main(int argc, char *argv[])
 				ret = -1;
 				break;
 			}
+			// Early versions of homeblock did not have timestamps or max_lba fields set.
+			// So fake it. The time here probably is close enough.
+			if ( !ourSuper.homeBlk.ctime )
+			{
+				fprintf(ourSuper.logFile,"homeBlk.ctime is 0, so faking 1996-12-14 14:00:00 PDT\n");
+				ourSuper.homeBlk.ctime = 850600800;	/* 1996-12-14 14:00:00 PDT */
+			}
+			if ( !ourSuper.homeBlk.mtime )
+				ourSuper.homeBlk.mtime = ourSuper.homeBlk.ctime;
 			if ( !ourSuper.homeBlk.max_lba )
+			{
+				fprintf(ourSuper.logFile, "homeBlk.max_lba is 0 so setting it to %ld\n", sizeInSectors );
 				ourSuper.homeBlk.max_lba = sizeInSectors;
+			}
 			ourSuper.freeMap.sectorsFree = ourSuper.homeBlk.max_lba - 1 - FSYS_MAX_ALTS;
 			ourSuper.freeMap.sectorsUsed = FSYS_MAX_ALTS;
+			if ( ourSuper.homeBlk.hb_major > 1 || (ourSuper.homeBlk.hb_minor >= 3) )
+				chkForBootFiles = 1;
 			if ( (ourSuper.verbose&VERBOSE_HOME) )
 			{
 				fprintf(ourSuper.logFile,"Found home blocks at sectors 0x%08X, 0x%08X, 0x%08X\n",
@@ -385,7 +399,25 @@ int main(int argc, char *argv[])
 							   lbas->lba[0], lbas->lba[1], lbas->lba[2],
 							   inode->fsHeader.type,
 							   S_ISDIR(inode->mode) ? "DIR":"REG");
-					memcpy(inode->fhSectors,lbas,FSYS_MAX_ALTS*sizeof(uint32_t));
+					memcpy(inode->fhSectors.lba,lbas,sizeof(IndexSys_t));
+					if ( chkForBootFiles )
+					{
+						int boots;
+						uint32_t *bootPtr[MAX_NUM_BOOT_FILES];
+						// Just check the 0'th FH lba. File could be listed as more than 1 boot image
+						bootPtr[0] = ourSuper.homeBlk.boot;
+						bootPtr[1] = ourSuper.homeBlk.boot1;
+						bootPtr[2] = ourSuper.homeBlk.boot2;
+						bootPtr[3] = ourSuper.homeBlk.boot3;
+						for (boots=0; boots < MAX_NUM_BOOT_FILES; ++boots)
+						{
+							if ( *bootPtr[boots] == inode->fhSectors.lba[0] )
+							{
+								inode->flags |= MGWFS_INODE_ANY_BOOT|(boots<<MGWFS_INODE_BOOT_IDX);
+								ourSuper.bootIndicies[boots] = inode->inode_no;
+							}
+						}
+					}
 				}
 				else
 				{

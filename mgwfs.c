@@ -147,9 +147,6 @@ void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t cksum)
 			   "    features:  0x%08X\n"
 			   "    options:   0x%08X\n"
 			   "    index[]:   0x%08X,0x%08X,0x%08X\n"
-			   "    boot[]:    0x%08X,0x%08X,0x%08X\n"
-			   "    max_lba:   0x%08X\n"
-			   "    upd_flag:  %d\n"
 			   , homeBlkp->def_extend
 			   , homeBlkp->ctime
 			   , homeBlkp->mtime
@@ -159,20 +156,46 @@ void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t cksum)
 			   , homeBlkp->features
 			   , homeBlkp->options
 			   , homeBlkp->index[0],homeBlkp->index[1],homeBlkp->index[2]
-			   , homeBlkp->boot[0],homeBlkp->boot[1],homeBlkp->boot[2]
-			   , homeBlkp->max_lba
-			   , homeBlkp->upd_flag
 			   );
-	fprintf(outp,
-		   "    boot1[]:   0x%08X, 0x%08X, 0x%08X\n"
-		   "    boot2[]:   0x%08X, 0x%08X, 0x%08X\n"
-		   "    boot3[]:   0x%08X, 0x%08X, 0x%08X\n"
-		   "    journal[]: 0x%08X, 0x%08X, 0x%08X\n"
-		   ,homeBlkp->boot1[0], homeBlkp->boot1[1], homeBlkp->boot1[2]
-		   ,homeBlkp->boot2[0], homeBlkp->boot2[1], homeBlkp->boot2[2]
-		   ,homeBlkp->boot3[0], homeBlkp->boot3[1], homeBlkp->boot3[2]
-		   ,homeBlkp->journal[0], homeBlkp->journal[1], homeBlkp->journal[2]
-		   );
+	if ( homeBlkp->hb_minor >= 3 )
+	{
+		fprintf(outp,
+				"    boot[]:    0x%08X,0x%08X,0x%08X\n"
+				, homeBlkp->boot[0],homeBlkp->boot[1],homeBlkp->boot[2]
+				);
+	}
+	if ( homeBlkp->hb_minor >= 4 )
+	{
+		fprintf(outp,
+				"    max_lba:   0x%08X\n"
+				, homeBlkp->max_lba
+				);
+	}
+	if ( homeBlkp->hb_minor >= 5 )
+	{
+		fprintf(outp
+				,"    upd_flag:  %d\n"
+				, homeBlkp->upd_flag
+				);
+	}
+	if ( homeBlkp->hb_minor >= 6 )
+	{
+		fprintf(outp,
+			   "    boot1[]:   0x%08X, 0x%08X, 0x%08X\n"
+			   "    boot2[]:   0x%08X, 0x%08X, 0x%08X\n"
+			   "    boot3[]:   0x%08X, 0x%08X, 0x%08X\n"
+				,homeBlkp->boot1[0], homeBlkp->boot1[1], homeBlkp->boot1[2]
+				,homeBlkp->boot2[0], homeBlkp->boot2[1], homeBlkp->boot2[2]
+				,homeBlkp->boot3[0], homeBlkp->boot3[1], homeBlkp->boot3[2]
+				);
+	}
+	if ( homeBlkp->hb_minor >= 7 )
+	{
+		fprintf(outp,
+				"    journal[]: 0x%08X, 0x%08X, 0x%08X\n"
+				,homeBlkp->journal[0], homeBlkp->journal[1], homeBlkp->journal[2]
+				);
+	}
 	fflush(outp);
 }
 
@@ -192,39 +215,63 @@ static int getHBSector(MgwfsSuper_t *ourSuper, off64_t sector, FsysHomeBlock *hb
 	int jj, fd = ourSuper->fd;
 	size_t sts;
 	uint32_t options, cksum, *csp;
+	FILE *errf = ourSuper->logFile;
 	
 	if ( (ourSuper->verbose&VERBOSE_HOME) )
-		fprintf(ourSuper->logFile,"Attempting to read home block at sector 0x%lX\n", sector);
-	if ( lseek64(fd,sector*512,SEEK_SET) == (off64_t)-1 )
+		fprintf(ourSuper->logFile, "Attempting to read home block at sector 0x%lX\n", sector);
+	if ( lseek64(fd,sector*BYTES_PER_SECTOR,SEEK_SET) == (off64_t)-1 )
 	{
-		fprintf(ourSuper->errFile,"Failed to seek to sector 0x%lX: %s\n", sector, strerror(errno));
+		fprintf(errf,"Failed to seek to sector 0x%lX: %s\n", sector, strerror(errno));
 		return 1;
 	}
 	sts = read(fd, hb, sizeof(FsysHomeBlock));
 	if ( sts != sizeof(FsysHomeBlock) )
 	{
-		fprintf(ourSuper->errFile,"Failed to read %ld byte home block at sector 0x%lX: %s\n",
+		fprintf(errf,"Failed to read %ld byte home block at sector 0x%lX: %s\n",
 				sizeof(FsysHomeBlock),
 				sector,
 				strerror(errno));
 		return 2;
 	}
-	cksum = 0;
-	csp = (uint32_t *)hb;
-	for (jj=0; jj < sizeof(FsysHomeBlock)/sizeof(uint32_t); ++jj)
-		cksum += *csp++;
-	options = hb->features & hb->options & (FSYS_FEATURES_CMTIME | FSYS_FEATURES_EXTENSION_HEADER | FSYS_FEATURES_ABTIME);
-	if (    hb->id == FSYS_ID_HOME
-		 && hb->rp_major == 1
-		 && hb->rp_minor == 1
-		 && !cksum
-		 && options == FSYS_FEATURES_CMTIME
-		 && hb->fh_size == (int)sizeof(FsysHeader)
-		 && hb->maxalts == FSYS_MAX_ALTS
-	   )
+	if ( hb->id == FSYS_ID_HOME && hb->hb_size <= (int)sizeof(FsysHomeBlock))
 	{
+		cksum = 0;
+		if ( hb->hb_size < (int)sizeof(FsysHomeBlock) )
+			 memset((uint8_t *)hb + hb->hb_size, 0, sizeof(FsysHomeBlock)-hb->hb_size);
+		csp = (uint32_t *)hb;
+		for ( jj = 0; jj < hb->hb_size / sizeof(uint32_t); ++jj )
+			cksum += *csp++;
 		*ckSumP = cksum;
-		return 0;
+		options = hb->features & hb->options & (FSYS_FEATURES_CMTIME | FSYS_FEATURES_EXTENSION_HEADER | FSYS_FEATURES_ABTIME);
+		if (    hb->id == FSYS_ID_HOME
+			 && hb->hb_major == 1
+			 && (hb->hb_minor >= 1 && hb->hb_minor <= 7)
+			 && hb->rp_major == 1
+			 && hb->rp_minor == 1
+			 && !cksum
+			 && options == FSYS_FEATURES_CMTIME
+			 && hb->fh_size == (int)sizeof(FsysHeader)
+			 && hb->maxalts == FSYS_MAX_ALTS
+		   )
+		{
+			return 0;
+		}
+		if ( hb->id != FSYS_ID_HOME )
+			fprintf(errf,"Homeblock ID doesn't match. Found 0x%X, expected 0x%lX\n", hb->id, FSYS_ID_HOME);
+		if ( hb->hb_major != 1 )
+			fprintf(errf,"Homeblock hb_major doesn't match. Found %d, expected %d\n", hb->hb_major, 1);
+		if ( hb->hb_minor < 1 || hb->hb_minor > 7)
+			fprintf(errf,"Homeblock hb_minor doesn't match. Found %d, expected 1 through 7\n", hb->hb_major);
+		if ( hb->rp_major != 1 || hb->rp_minor != 1)
+			fprintf(errf,"Homeblock rp_major or rp_minor doesn't match. Found %d.%d, expected 1.1\n", hb->rp_major, hb->rp_minor);
+		if ( cksum )
+			fprintf(errf,"Homeblock checksum doesn't match. Found 0x%X, expected 0\n", cksum);
+		if ( options != FSYS_FEATURES_CMTIME )
+			fprintf(errf,"Homeblock features doesn't match. Found 0x%X, expected 0x%X\n", options, FSYS_FEATURES_CMTIME);
+		if ( hb->fh_size != (int)sizeof(FsysHeader) )
+			fprintf(errf,"Homeblock fh_size doesn't match. Found %d, expected %ld\n", hb->fh_size, sizeof(FsysHeader));
+		if ( hb->maxalts != FSYS_MAX_ALTS )
+			fprintf(errf,"Homeblock maxalts doesn't match. Found %d, expected %d\n", hb->maxalts, FSYS_MAX_ALTS);
 	}
 	return 3;
 }
@@ -426,38 +473,6 @@ int readWholeFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int 
 	return retSize;
 }
 
-#if 0
-static void dmpDirty(const char *title1, const char *title2, MgwfsSuper_t *ourSuper, int haveRetVal, int retVal)
-{
-	if ( (ourSuper->verbose&VERBOSE_WRITES) )
-	{
-		char tmpBuf[265];
-		int ii, len;
-		
-		ii = ourSuper->numDirtyInodes;
-		ii += (ourSuper->specialDirtys&SPECIAL_DIRTY_INDEX)?1:0;
-		ii += (ourSuper->specialDirtys&SPECIAL_DIRTY_FREE)?1:0;
-		len = snprintf(tmpBuf,sizeof(tmpBuf),"%s %s idx=%d ",
-					   title1, title2, ii );
-		if ( ourSuper->dirtyInodes )
-		{
-			for ( ii = 0; ii < ourSuper->numDirtyInodes; ++ii )
-				len += snprintf(tmpBuf + len, sizeof(tmpBuf) - len, " %d", ourSuper->dirtyInodes[ii]);
-		}
-		if ( (ourSuper->specialDirtys&SPECIAL_DIRTY_INDEX) )
-			len += snprintf(tmpBuf + len, sizeof(tmpBuf) - len, " %d", FSYS_INDEX_INDEX);
-		if ( (ourSuper->specialDirtys&SPECIAL_DIRTY_FREE) )
-			len += snprintf(tmpBuf + len, sizeof(tmpBuf) - len, " %d", FSYS_INDEX_FREE);
-		if ( haveRetVal )
-			len += snprintf(tmpBuf + len, sizeof(tmpBuf) - len, " returned %d", retVal);
-		fprintf(ourSuper->logFile, "%s\n", tmpBuf);
-		fflush(ourSuper->logFile);
-	}
-}
-#else
-#define dmpDirty(a,b,c,d,e) do { ; } while (0)
-#endif
-
 void addToDirty(const char *title, MgwfsSuper_t *ourSuper, int idx)
 {
 	int ii, *dInodes;
@@ -487,7 +502,6 @@ void addToDirty(const char *title, MgwfsSuper_t *ourSuper, int idx)
 				break;
 			}
 		} while ( 0 );
-		dmpDirty("addToDirty()", title, ourSuper, 0, 0);
 		UNLOCK_IT("wrMutex", ourSuper, &wrMutex);
 		return;
 	}
@@ -497,7 +511,6 @@ void addToDirty(const char *title, MgwfsSuper_t *ourSuper, int idx)
 		{
 			if ( *dInodes == idx )
 			{
-				dmpDirty("addToDirty()", title, ourSuper, 0, 0);
 				UNLOCK_IT("wrMutex", ourSuper, &wrMutex);
 				return;		// Already in list. Nothing to do.
 			}
@@ -527,7 +540,6 @@ void addToDirty(const char *title, MgwfsSuper_t *ourSuper, int idx)
 	}
 	ourSuper->dirtyInodes[ourSuper->numDirtyInodes] = idx;
 	++ourSuper->numDirtyInodes;
-	dmpDirty("addToDirty()", title, ourSuper, 0, 0);
 	UNLOCK_IT("wrMutex", ourSuper, &wrMutex);
 }
 
@@ -541,7 +553,7 @@ static int popFmDirty(MgwfsSuper_t *ourSuper)
 		memmove(ourSuper->dirtyInodes + 0, ourSuper->dirtyInodes + 1, (ourSuper->numDirtyInodes-1)*sizeof(int32_t));
 		--ourSuper->numDirtyInodes;
 	}
-	if ( nxt < 0 && !(ourSuper->specialDirtys&SPECIAL_DIRTY_NEST) )
+	if ( nxt < 0 )
 	{
 		if ( (ourSuper->specialDirtys & SPECIAL_DIRTY_INDEX) )
 		{
@@ -554,7 +566,6 @@ static int popFmDirty(MgwfsSuper_t *ourSuper)
 			nxt = FSYS_INDEX_FREE;
 		}
 	}
-	dmpDirty("popFmDirty()","",ourSuper,1,nxt);
 	UNLOCK_IT("wrMutex",ourSuper,&wrMutex);
 	return nxt;
 }
@@ -591,7 +602,7 @@ static int allocateFHSectors( MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, Index
 		 * reads from indexSys[] (fhLBA), but the index.sys file is rebuilt from
 		 * inode->fhSectors, so both must carry the newly allocated sectors or
 		 * the inode won't be findable after a remount. */
-		inode->fhSectors[altIdx] = tmpRPs[altIdx].start;
+		inode->fhSectors.lba[altIdx] = tmpRPs[altIdx].start;
 	}
 	addToDirty("allocFHSectors()", ourSuper, FSYS_INDEX_INDEX);
 	addToDirty("allocFHSectors()", ourSuper, FSYS_INDEX_FREE);
@@ -720,7 +731,7 @@ static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode
 	 * given freshly allocated header sectors. Doing so would relocate index.sys
 	 * without updating the home block, and the old copy would be read on the
 	 * next mount. */
-	needFH = inode->inode_no && (!inode->fhSectors[0] || (inode->fhSectors[0] & FSYS_EMPTYLBA_BIT));
+	needFH = inode->inode_no && (!inode->fhSectors.lba[0] || (inode->fhSectors.lba[0] & FSYS_EMPTYLBA_BIT));
 	if ( !needFH )
 	{
 		int ii;
@@ -771,32 +782,6 @@ static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode
 			fprintf(ourSuper->logFile,"writeWholeFile() returned from allocateRPSectors() with -1. Quit with -ENOSPC\n");
 			return -ENOSPC;
 		}
-//		fprintf(ourSuper->logFile, "writeWholeFile() returned from allocateRPSectors() with >=0. clusters=%d\n", inode->fsHeader.clusters);
-#if 0
-		inode->fsHeader.clusters += ourSuper->homeBlk.def_extend;
-		newBuffSize = inode->fsHeader.clusters * BYTES_PER_SECTOR;
-		if ( rwBuff->buffSize < newBuffSize )
-		{
-			uint8_t *newBuff;
-			newBuff = (uint8_t *)realloc(rwBuff->buff, newBuffSize );
-			if ( !newBuff )
-			{
-				fprintf(ourSuper->logFile, "%s: fileExtend('%s'). Out of memory. Failed to realloc(%d) bytes\n",
-						title,
-						inode->fileName,
-						newBuffSize);
-				if ( rwBuff->buff )
-					free(rwBuff->buff);
-				rwBuff->buffErr = -ENOMEM;
-				rwBuff->buff = NULL;
-				rwBuff->buffOffset = 0;
-				rwBuff->buffSize = 0;
-				return -ENOMEM;
-			}
-			rwBuff->buff = newBuff;
-			rwBuff->buffSize = newBuffSize;
-		}
-#endif
 	}
 	/* write the file to disk */
 	for (copyCnt=0; copyCnt < copies; ++copyCnt)
@@ -804,46 +789,11 @@ static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode
 		retPtr = inode->fsHeader.pointers[copyCnt] + 0;
 		ptrIdx = 0;
 		retSize = 0;
-#if 0
-		{
-			int jj,len;
-			char buf[256];
-			len = snprintf(buf,sizeof(buf),"%s writeWholeFile(): RPs [0]:", title);
-			for (jj=0; jj < FSYS_MAX_FHPTRS; ++jj)
-			{
-				len += snprintf(buf + len, sizeof(buf) - len, " 0x%X/0x%X",
-								inode->fsHeader.pointers[copyCnt][jj].start,
-								inode->fsHeader.pointers[copyCnt][jj].nblocks
-								);
-				if ( jj > 0 && !inode->fsHeader.pointers[copyCnt][jj].nblocks )
-					break;
-			}
-			fprintf(ourSuper->logFile,"%s\n",buf);
-		}
-		fprintf(ourSuper->logFile,"%s writeWholeFile(): Before: sector=%ld, blkLimit=%d, limit=%ld, retPtr=%p, ptrIdx=%d\n"
-				,title
-				,sector
-				,blkLimit
-				,limit
-				,retPtr
-				,ptrIdx
-				);
-#endif
 		while ( retSize < bytes )
 		{
 			sector = retPtr->start;
 			blkLimit = retPtr->nblocks;
 			limit = bytes - retSize;
-#if 0
-			fprintf(ourSuper->logFile,"%s writeWholeFile(): Before: sector=%ld, blkLimit=%d, limit=%ld, retPtr=%p, ptrIdx=%d\n"
-					,title
-					,sector
-					,blkLimit
-					,limit
-					,retPtr
-					,ptrIdx
-					);
-#endif
 			if ( blkLimit*BYTES_PER_SECTOR > limit )
 				blkLimit = ((blkLimit*BYTES_PER_SECTOR-limit)+BYTES_PER_SECTOR-1)/BYTES_PER_SECTOR;
             if ( limit > retPtr->nblocks*BYTES_PER_SECTOR )
@@ -852,16 +802,6 @@ static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode
                 ++retPtr;   /* advance to next RP */
                 ++ptrIdx;
             }
-#if 0
-			fprintf(ourSuper->logFile,"%s writeWholeFile(): After: sector=%ld, blkLimit=%d, limit=%ld, retPtr=%p, ptrIdx=%d\n"
-					,title
-					,sector
-					,blkLimit
-					,limit
-					,retPtr
-					,ptrIdx
-					);
-#endif
 			if ( (ourSuper->verbose&VERBOSE_WRITES) )
 			{
 				fprintf(ourSuper->logFile,"%s: Writing %ld bytes (%ld sectors) at sector 0x%08lX for copy %d of %s\n",
@@ -911,6 +851,51 @@ static uint8_t *insertFilenameIntoDir(uint8_t *ptr, int inodeIdx, const char *fi
 	return ptr;
 }
 
+static int writeHomeBlock(MgwfsSuper_t *ourSuper)
+{
+	ssize_t wrSts;
+	uint32_t cksum, *csp;
+	int jj, alt, retSts=0;
+	static const char Title[] = "writeHomeBlock():";
+	FsysHomeBlock *homeBlkP;
+	
+	cksum = 0;
+	homeBlkP = &ourSuper->homeBlk;
+	homeBlkP->chksum = 0;
+	csp = (uint32_t *)homeBlkP;
+	homeBlkP->chksum = 0;
+	for ( jj = 0; jj < ourSuper->homeBlk.hb_size/sizeof(uint32_t); ++jj )
+		cksum += *csp++;
+	homeBlkP->chksum = -cksum;
+	for (alt=0; alt < FSYS_MAX_ALTS; ++alt)
+	{
+		uint32_t lba;
+		
+		lba = ourSuper->homeLbas[alt];
+		if ( (ourSuper->verbose & VERBOSE_WRITES) )
+		{
+			fprintf(ourSuper->logFile,"%s Writing (effective) %d byte homeblock %d at sector 0x%X\n",
+					Title, ourSuper->homeBlk.hb_size, alt, lba);
+		}
+		if ( lseek64(ourSuper->fd,(lba+ourSuper->baseSector)*BYTES_PER_SECTOR,SEEK_SET) == (off64_t)-1 )
+		{
+			fprintf(ourSuper->errFile, "%s Failed to seek to homeblock %d sector 0x%X: %s\n",
+					Title, alt, lba, strerror(errno));
+			retSts = -EIO;
+			break;
+		}
+		wrSts = write(ourSuper->fd, (uint8_t *)homeBlkP, homeBlkP->hb_size);
+		if ( wrSts != homeBlkP->hb_size )
+		{
+			fprintf(ourSuper->errFile,"%s Failed to write %d bytes to sector 0x%X. Instead got %ld: %s\n",
+					Title, homeBlkP->hb_size, lba, wrSts, strerror(errno));
+			retSts = -EIO;
+		}
+	}
+	fflush(ourSuper->logFile);
+	return retSts;
+}
+
 int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper)
 {
 	int sts=0;
@@ -943,7 +928,7 @@ int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper)
 				if ( !inode )
 					fhLBAs->lba[0] = FSYS_EMPTYLBA_BIT;
 				else
-					memcpy(fhLBAs, inode->fhSectors, sizeof(IndexSys_t));
+					memcpy(fhLBAs, inode->fhSectors.lba, sizeof(IndexSys_t));
 				++fhLBAs;
 			}
 			inode = ourSuper->inodeList[inodeIdx];
@@ -1004,8 +989,11 @@ int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper)
 		if ( (ourSuper->verbose&VERBOSE_WRITES) )
 			fflush(ourSuper->logFile);
 	}
-	fprintf(ourSuper->logFile,"Exiting updateAllMetaData(): sts=%d\n", sts);
-	fflush(ourSuper->logFile);
+	if ( !sts && (ourSuper->specialDirtys&SPECIAL_DIRTY_HOME) )
+	{
+		ourSuper->specialDirtys &= ~SPECIAL_DIRTY_HOME;
+		sts = writeHomeBlock(ourSuper);
+	}
 	UNLOCK_IT("wrMutex", ourSuper, &wrMutex);
 	return sts;
 }
@@ -1554,7 +1542,7 @@ int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 	prevInodePtr = inode;			/* remember the current inode pointer  */
 	nextPtr = &inode->idxChildTop;	/* point to place to put index should this inode be itself a directory */
 	prevIdx = 0;					/* There's no previous for the first entry in this directory */
-	while ( dirContents < dirContents+inode->fsHeader.size )
+	while ( dirContents < mem+inode->fsHeader.size )
 	{
 		int txtLen;
 		uint8_t gen;
@@ -1572,10 +1560,11 @@ int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 		{
 			if ( gen && txtLen )
 			{
-				fprintf(ourSuper->logFile, "%sFound file '%s' in dir '%s' with invalid fid: %d. fid must be 0 < fid < %d. (gen=%d, txtLen=%d) Skipped\n",
+				fprintf(ourSuper->logFile, "%sFound file '%s' in dir '%s' with invalid fid: %d(0x%X). fid must be 0 < fid < %d. (gen=%d, txtLen=%d) Skipped\n",
 						ErrTitle,
 						dirContents,
 						inode->fileName,
+						fid,
 						fid,
 						ourSuper->numInodesAvailable,
 						gen, txtLen
@@ -1864,21 +1853,6 @@ void freeFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx)
 		}
 		memset(fhp, 0, sizeof(FuseFH_t));
 	}
-}
-
-int writeHomeBlock(MgwfsSuper_t *super)
-{
-	return EIO;
-}
-
-int writeIndexSys(MgwfsSuper_t *super)
-{
-	return EIO;
-}
-
-int writeFreeMapSys(MgwfsSuper_t *super)
-{
-	return EIO;
 }
 
 /*

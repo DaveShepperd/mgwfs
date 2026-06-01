@@ -12,7 +12,7 @@ CC = gcc
 LD = gcc
 
 OBJS = main.o mgwfs.o freemap.o fuse.o
-HS = agcfsys.h mgwfs.h
+HS = agcfsys.h mgwfs.h mgwfsctl.h
 
 default: mgwfs mgwfsctl
 
@@ -21,7 +21,7 @@ mgwfs: $(OBJS) Makefile
 
 # Standalone control/query helper. No fuse dependency; only needs the
 # shared ioctl ABI header.
-mgwfsctl.o: mgwfsctl.c mgwfs_ioctl.h Makefile
+mgwfsctl.o: mgwfsctl.c mgwfsctl.h Makefile
 	$(CC) -c $(CFLAGS) $<
 
 mgwfsctl: mgwfsctl.o Makefile

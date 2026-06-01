@@ -18,8 +18,15 @@
  * verbose flags without remounting. cmd encodes the struct size so libfuse
  * hands us a correctly sized data buffer (no FUSE_IOCTL_UNRESTRICTED retry).
  */
+#define MAX_NUM_BOOT_FILES	(4)
+#define MAX_BOOT_FN_PATH	(128)	/* arbitrary length. Will be plenty long enough for any game produced */
 typedef struct
 {
+	uint16_t hbMajor;			/* Major version of home block */
+	uint16_t hbMinor;			/* Minor version of home block */
+	uint16_t hbSize;			/* size of home block (old versions=80, new versions=152) */
+	uint16_t maxAlts;			/* FSYS_MAX_ALTS value on media */
+	uint32_t defExtend;			/* default number of sectors to extend */
 	uint32_t sectorsFree;		/* free sectors (from freeMap) */
 	uint32_t sectorsUsed;		/* used sectors */
 	uint32_t sectorsLost;		/* sectors lost track of */
@@ -29,11 +36,16 @@ typedef struct
 	int32_t  numInodesAvailable;	/* inodes allocated */
 	int32_t  numDirtyInodes;	/* inodes pending write-back */
 	uint32_t verbose;		/* current verbose flags */
+	char bootFiles[MAX_NUM_BOOT_FILES][MAX_BOOT_FN_PATH];
 } MgwfsIoctlStats_t;
 
 #define MGWFS_IOC_MAGIC 'M'
-#define MGWFS_IOC_GETSTATS	_IOR(MGWFS_IOC_MAGIC, 1, MgwfsIoctlStats_t)
+#define MGWFS_IOC_GETSTATS		_IOR(MGWFS_IOC_MAGIC, 1, MgwfsIoctlStats_t)
 #define MGWFS_IOC_GETVERBOSE	_IOR(MGWFS_IOC_MAGIC, 2, uint32_t)
 #define MGWFS_IOC_SETVERBOSE	_IOW(MGWFS_IOC_MAGIC, 3, uint32_t)
+#define MGWFS_IOC_SETBOOT0		_IOW(MGWFS_IOC_MAGIC, 4, char *)
+#define MGWFS_IOC_SETBOOT1		_IOW(MGWFS_IOC_MAGIC, 5, char *)
+#define MGWFS_IOC_SETBOOT2		_IOW(MGWFS_IOC_MAGIC, 6, char *)
+#define MGWFS_IOC_SETBOOT3		_IOW(MGWFS_IOC_MAGIC, 7, char *)
 
 #endif /* MGWFS_IOCTL_H_ */

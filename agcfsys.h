@@ -390,7 +390,7 @@ enum filesys {
 
 /* Description of volume home blocks */
 
-typedef struct old_homeblock {
+typedef struct {
     uint32_t id;                   /* block ID type. s/b FEEDF00D */
     uint16_t hb_minor;            /* home block minor version */
     uint16_t hb_major;            /* home block major version */
@@ -419,10 +419,142 @@ typedef struct old_homeblock {
     uint32_t index[FSYS_MAX_ALTS]; /* up to n ptrs to index.sys files */
 } FsysHomeBlock_v1_1;			  /* very old version of home block (probably only S.F. Rush) */
 
+typedef struct {
+    uint32_t id;                   /* block ID type. s/b FEEDF00D */
+    uint16_t hb_minor;            /* home block minor version */
+    uint16_t hb_major;            /* home block major version */
+    uint16_t hb_size;             /* size in bytes of home block struct */
+    uint16_t fh_minor;            /* file header minor version */
+    uint16_t fh_major;            /* file header major version */
+    uint16_t fh_size;             /* size in bytes of file header struct */
+    uint16_t fh_ptrs;             /* number of retrieval pointers in a file header */
+    uint16_t efh_minor;           /* extension file header minor version */
+    uint16_t efh_major;           /* extension file header major version */
+    uint16_t efh_size;            /* size in bytes of extension file header struct */
+    uint16_t efh_ptrs;            /* number of retrieval pointers in an extension file header */
+    uint16_t rp_minor;            /* retrieval pointer minor version */
+    uint16_t rp_major;            /* retrieval pointer major version */
+    uint16_t rp_size;             /* size in bytes of retrieval pointer struct */
+    uint16_t cluster;             /* blocks per cluster */
+    uint16_t maxalts;             /* number of alternates on this volume */
+	uint32_t def_extend;		  /* default number of clusters to extend files */
+    uint32_t ctime;               /* volume creation date/time */
+    uint32_t mtime;               /* volume modification date/time */
+    uint32_t atime;               /* volume access date/time */
+    uint32_t btime;               /* volume backup date/time */
+    uint32_t chksum;              /* home block checksum */
+    uint32_t features;            /* file system features */
+    uint32_t options;             /* file system options */
+    uint32_t index[FSYS_MAX_ALTS]; /* up to n ptrs to index.sys files */
+	uint32_t boot[FSYS_MAX_ALTS];	/* up to n ptrs to boot file (added with version 1.3) */
+	uint32_t max_lba;			/* number of LBA's allocated to this volume (added with version 1.3 */
+} FsysHomeBlock_v1_3;
+
+typedef struct {
+    uint32_t id;                   /* block ID type. s/b FEEDF00D */
+    uint16_t hb_minor;            /* home block minor version */
+    uint16_t hb_major;            /* home block major version */
+    uint16_t hb_size;             /* size in bytes of home block struct */
+    uint16_t fh_minor;            /* file header minor version */
+    uint16_t fh_major;            /* file header major version */
+    uint16_t fh_size;             /* size in bytes of file header struct */
+    uint16_t fh_ptrs;             /* number of retrieval pointers in a file header */
+    uint16_t efh_minor;           /* extension file header minor version */
+    uint16_t efh_major;           /* extension file header major version */
+    uint16_t efh_size;            /* size in bytes of extension file header struct */
+    uint16_t efh_ptrs;            /* number of retrieval pointers in an extension file header */
+    uint16_t rp_minor;            /* retrieval pointer minor version */
+    uint16_t rp_major;            /* retrieval pointer major version */
+    uint16_t rp_size;             /* size in bytes of retrieval pointer struct */
+    uint16_t cluster;             /* blocks per cluster */
+    uint16_t maxalts;             /* number of alternates on this volume */
+	uint32_t def_extend;		  /* default number of clusters to extend files */
+    uint32_t ctime;               /* volume creation date/time */
+    uint32_t mtime;               /* volume modification date/time */
+    uint32_t atime;               /* volume access date/time */
+    uint32_t btime;               /* volume backup date/time */
+    uint32_t chksum;              /* home block checksum */
+    uint32_t features;            /* file system features */
+    uint32_t options;             /* file system options */
+    uint32_t index[FSYS_MAX_ALTS]; /* up to n ptrs to index.sys files */
+	uint32_t boot[FSYS_MAX_ALTS];	/* up to n ptrs to boot file (added with version 1.3) */
+	uint32_t max_lba;			/* number of LBA's allocated to this volume (added with version 1.3 */
+	uint32_t hb_range;			/* just for fsysdmp's benefit (added with version 1.4) */
+} FsysHomeBlock_v1_4;
+
+typedef struct {
+    uint32_t id;                   /* block ID type. s/b FEEDF00D */
+    uint16_t hb_minor;            /* home block minor version */
+    uint16_t hb_major;            /* home block major version */
+    uint16_t hb_size;             /* size in bytes of home block struct */
+    uint16_t fh_minor;            /* file header minor version */
+    uint16_t fh_major;            /* file header major version */
+    uint16_t fh_size;             /* size in bytes of file header struct */
+    uint16_t fh_ptrs;             /* number of retrieval pointers in a file header */
+    uint16_t efh_minor;           /* extension file header minor version */
+    uint16_t efh_major;           /* extension file header major version */
+    uint16_t efh_size;            /* size in bytes of extension file header struct */
+    uint16_t efh_ptrs;            /* number of retrieval pointers in an extension file header */
+    uint16_t rp_minor;            /* retrieval pointer minor version */
+    uint16_t rp_major;            /* retrieval pointer major version */
+    uint16_t rp_size;             /* size in bytes of retrieval pointer struct */
+    uint16_t cluster;             /* blocks per cluster */
+    uint16_t maxalts;             /* number of alternates on this volume */
+	uint32_t def_extend;		  /* default number of clusters to extend files */
+    uint32_t ctime;               /* volume creation date/time */
+    uint32_t mtime;               /* volume modification date/time */
+    uint32_t atime;               /* volume access date/time */
+    uint32_t btime;               /* volume backup date/time */
+    uint32_t chksum;              /* home block checksum */
+    uint32_t features;            /* file system features */
+    uint32_t options;             /* file system options */
+    uint32_t index[FSYS_MAX_ALTS]; /* up to n ptrs to index.sys files */
+	uint32_t boot[FSYS_MAX_ALTS];	/* up to n ptrs to boot file (added with version 1.3) */
+	uint32_t max_lba;			/* number of LBA's allocated to this volume (added with version 1.3 */
+	uint32_t hb_range;			/* just for fsysdmp's benefit (added with version 1.4) */
+	uint32_t upd_flag;			/* update indicator when set (added with version 1.5) */
+} FsysHomeBlock_v1_5;
+
+typedef struct {
+    uint32_t id;                   /* block ID type. s/b FEEDF00D */
+    uint16_t hb_minor;            /* home block minor version */
+    uint16_t hb_major;            /* home block major version */
+    uint16_t hb_size;             /* size in bytes of home block struct */
+    uint16_t fh_minor;            /* file header minor version */
+    uint16_t fh_major;            /* file header major version */
+    uint16_t fh_size;             /* size in bytes of file header struct */
+    uint16_t fh_ptrs;             /* number of retrieval pointers in a file header */
+    uint16_t efh_minor;           /* extension file header minor version */
+    uint16_t efh_major;           /* extension file header major version */
+    uint16_t efh_size;            /* size in bytes of extension file header struct */
+    uint16_t efh_ptrs;            /* number of retrieval pointers in an extension file header */
+    uint16_t rp_minor;            /* retrieval pointer minor version */
+    uint16_t rp_major;            /* retrieval pointer major version */
+    uint16_t rp_size;             /* size in bytes of retrieval pointer struct */
+    uint16_t cluster;             /* blocks per cluster */
+    uint16_t maxalts;             /* number of alternates on this volume */
+	uint32_t def_extend;		  /* default number of clusters to extend files */
+    uint32_t ctime;               /* volume creation date/time */
+    uint32_t mtime;               /* volume modification date/time */
+    uint32_t atime;               /* volume access date/time */
+    uint32_t btime;               /* volume backup date/time */
+    uint32_t chksum;              /* home block checksum */
+    uint32_t features;            /* file system features */
+    uint32_t options;             /* file system options */
+    uint32_t index[FSYS_MAX_ALTS]; /* up to n ptrs to index.sys files */
+	uint32_t boot[FSYS_MAX_ALTS];	/* up to n ptrs to boot file (added with version 1.3) */
+	uint32_t max_lba;			/* number of LBA's allocated to this volume (added with version 1.3 */
+	uint32_t hb_range;			/* just for fsysdmp's benefit (added with version 1.4) */
+	uint32_t upd_flag;			/* update indicator when set (added with version 1.5) */
+	uint32_t boot1[FSYS_MAX_ALTS];	/* up to n ptrs to secondary boot file (added with version 1.6) */
+	uint32_t boot2[FSYS_MAX_ALTS];	/* up to n ptrs to tertiary boot file (added with version 1.6) */
+	uint32_t boot3[FSYS_MAX_ALTS];	/* up to n ptrs to (?)ary boot file (added with version 1.6) */
+} FsysHomeBlock_v1_6;
+
 typedef struct home_block {
     uint32_t id;			/* block ID type. s/b FEEDF00D */
-    uint16_t hb_minor;		/* home block minor version */
-    uint16_t hb_major;		/* home block major version */
+    uint16_t hb_minor;		/* home block minor version (latest: = 7) */
+    uint16_t hb_major;		/* home block major version (= 1 on all systems) */
     uint16_t hb_size;		/* size in bytes of home block struct */
     uint16_t fh_minor;		/* file header minor version */
     uint16_t fh_major;		/* file header major version */
@@ -438,10 +570,10 @@ typedef struct home_block {
     uint16_t cluster;		/* blocks per cluster */
     uint16_t maxalts;		/* number of alternates on this volume */
     uint32_t def_extend;	/* default number of clusters to extend files (added with version 1.1) */
-    uint32_t ctime;		/* volume creation date/time */
-    uint32_t mtime;		/* volume modification date/time */
-    uint32_t atime;		/* volume access date/time */
-    uint32_t btime;		/* volume backup date/time */
+    uint32_t ctime;			/* volume creation date/time */
+    uint32_t mtime;			/* volume modification date/time */
+    uint32_t atime;			/* volume access date/time */
+    uint32_t btime;			/* volume backup date/time */
     uint32_t chksum;		/* home block checksum */
     uint32_t features;		/* file system features */
     uint32_t options;		/* file system options */

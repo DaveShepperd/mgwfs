@@ -57,6 +57,11 @@ typedef struct
 	int openFlags;			/* flags passed in on open() */
 } FuseFH_t;
 
+typedef struct
+{
+	uint32_t lba[FSYS_MAX_ALTS];
+} IndexSys_t;
+
 typedef struct MgwfsInode_t
 {
 	int idxParentInode;				/* Index to parent directory's inode (i.e. super->inodeList[xx]) */
@@ -65,7 +70,7 @@ typedef struct MgwfsInode_t
 	int idxChildTop;				/* Index to list of inodes if this is a directory */
 	int numInodes;					/* number of inodes in this directory */
 	uint32_t inode_no;				/* file's local ID (relative to indexSys) */
-	uint32_t fhSectors[FSYS_MAX_ALTS]; /* on disk sector ID's to copies of FH (from index.sys) */
+	IndexSys_t fhSectors;			/* on disk sector ID's to copies of FH (from index.sys) */
 	mode_t mode;					/* file's mode */
 	int fnLen;						/* Filename length */
 	FsysHeader fsHeader;			/* File's header */
@@ -75,7 +80,11 @@ typedef struct MgwfsInode_t
 } MgwfsInode_t;
 
 /* Bits for MgwfsInode_t.flags */
-#define MGWFS_INODE_MTIME_SET (1<<0)	/* mtime was set explicitly (e.g. via utimens); do not restamp on flush */
+#define MGWFS_INODE_BOOT_IDX	(0)		/* file's boot index (2 bits: value 0 to 3) */
+#define MGWFS_INODE_BOOT_MASK	(3)		/* file's boot index (2 bits: value 0 to 3) */
+#define MGWFS_INODE_ANY_BOOT	(1<<2)	/* file is set as a boot file (which file of 4 in bits 0&1)*/
+#define MGWFS_INODE_JOURNAL		(1<<3)	/* file is set as journal */
+#define MGWFS_INODE_MTIME_SET	(1<<4)	/* mtime was set explicitly (e.g. via utimens); do not restamp on flush */
 
 enum
 {
@@ -138,14 +147,11 @@ typedef struct
 
 #define FREEMAP_RP_PTR(ptr) (FsysRetPtr *)(ptr->rwBuff.buff)
 
-typedef struct
-{
-	uint32_t lba[FSYS_MAX_ALTS];
-} IndexSys_t;
+#define SPECIAL_DIRTY_INDEX 0x01	/* index.sys is dirty */
+#define SPECIAL_DIRTY_FREE	0x02	/* freemap.sys is dirty */
+#define SPECIAL_DIRTY_HOME	0x04	/* homeblock is dirty */
 
-#define SPECIAL_DIRTY_INDEX 0x01
-#define SPECIAL_DIRTY_FREE	0x02
-#define SPECIAL_DIRTY_NEST	0x04
+#define MAX_NUM_BOOT_FILES (4)
 
 typedef struct MgwfsSuper_t
 {
@@ -157,7 +163,8 @@ typedef struct MgwfsSuper_t
 	int defaultCopies;		/* Default number of copies to make of new files */
 	uint32_t baseSector;	/* sector offset to start of our fs if in a partition */
 	uint32_t maxHb;			/* maximum home block sector */
-	uint32_t homeLbas[FSYS_MAX_ALTS];
+	uint32_t homeLbas[FSYS_MAX_ALTS];	/* sectors where to find home blocks */
+	uint32_t bootIndicies[MAX_NUM_BOOT_FILES]; /* FID's of boot files (0=none) */
 	FsysHomeBlock homeBlk;	/* A copy of our home block from disk */
 	FsysHeader indexSysHdr;	/* copy of the file header of index.sys */
 	IndexSys_t *indexSys;	/* Contents of index.sys file */
@@ -165,7 +172,6 @@ typedef struct MgwfsSuper_t
 	int numInodesUsed;		/* number of items in list */
 	int numInodesAvailable; /* number of items available in list */
 	FreeMap_t freeMap;		/* Contents of freemap.sys file */
-//	int dirtyInodes[MAX_DIRTY_INODE];	/* List of inodes to write back to disk */
 	int *dirtyInodes;		/* List of inodes to write back to disk */
 	int numDirtyInodes;		/* Number of items in dirtyInodes */
 	int numDirtyInodesAvailable; /* Number of items in dirtyInodes */
@@ -176,7 +182,7 @@ typedef struct MgwfsSuper_t
 	int numFuseFHs;			/* number of items available in fuseFHs */
 } MgwfsSuper_t;
 
-#include "mgwfs_ioctl.h"
+#include "mgwfsctl.h"
 
 #if !NO_MUTEXES
 extern void mgwfs_destroy_mutex(void);
@@ -281,9 +287,9 @@ extern int findInode(MgwfsSuper_t *ourSuper, int topIdx, const char *path);
 extern int countSectors(FsysRetPtr *rp, int maxRps, uint32_t *totalSectors);
 extern FuseFH_t *getFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx);
 extern void freeFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx);
-extern int writeHomeBlock(MgwfsSuper_t *super);
-extern int writeIndexSys(MgwfsSuper_t *super);
-extern int writeFreeMapSys(MgwfsSuper_t *super);
+//extern int writeHomeBlock(MgwfsSuper_t *super);
+//extern int writeIndexSys(MgwfsSuper_t *super);
+//extern int writeFreeMapSys(MgwfsSuper_t *super);
 extern int writeFileHeader(MgwfsSuper_t *super, MgwfsInode_t *inode);
 extern int writeDirectory(MgwfsSuper_t *super, MgwfsInode_t *dir);
 extern MgwfsInode_t *findUnusedInode(MgwfsSuper_t *super);

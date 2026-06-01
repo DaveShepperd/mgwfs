@@ -503,6 +503,11 @@ int main(int argc, char *argv[])
 	fflush(ourSuper.logFile);
 	if ( ret >= 0 && !options.quit )
 	{
+		/* Force libfuse into single-threaded mode regardless of the
+		   command line (idempotent if the user also passed -s). The
+		   filesystem shares mutable state via ourSuper and relies on
+		   single-threaded servicing rather than fine-grained locking. */
+		fuse_opt_add_arg(&args, "-s");
 		ret = fuse_main(args.argc, args.argv, &mgwfs_oper, NULL);
 		fuse_opt_free_args(&args);
 	}

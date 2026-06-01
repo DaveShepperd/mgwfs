@@ -21,22 +21,35 @@ git clone https://github.com/daveshepperd/mgwfs.git mgwfs
 cd mgwfs
 make
 mkdir game
-./mgwfs --image=<path-to-Atari-image> game
+./mgwfs --image=<path-to-Atari-image> <path-to-local-mount-point>
 
 Use ./mgwfs --help for list of command line options.
 ```
 
-It has taken quite a while, but with the help of Claude, I added write functionality to it. It probably works. Add the --rw command line option to allow read/write to the image.
+It has taken ne quite a while to get to it, but with the enormous and grateful help of Claude 4.8, write functionality has been added. I haven't done a lot of testing with it. Claude did quite a bit of testing while it was writing its stuff, so it probably works okay. Add the --rw command line option to allow read/write to the image.
 
-NOTE: The boot file has special marking on versions of the filesystem greater than v1.1. In order to allow you to mark a file as being a boot file, use the new image mgwfsctl.
-Use ./mgwfsctl --help to get a list of command line options for that tool. I.e., if the mount point spec'd with mgwfs is /mnt/mgw and the boot file you want to mark is at
-/mnt/mgw/somewhere/over/the/rainbow/bootme.img, then use this command to mark it:
+NOTE: The boot file has special marking on versions of the filesystem greater than v1.1. In order to allow you to mark a file as being a boot file, use the new tool mgwfsctl.
+Assuming your boot file is at relative location on the game disk <b>somewhere/over/the/rainbow/bootme.img</b>. An example of how you would mark it as the boot file:
 
 ```
+# Create a local mount point
+mkdir -p /mnt/mgw
+# Mount the Atari image on it
+./mgwfs --image=<path-to-Atari-image> --rw /mnt/mgw
+# If you are interested, get some info about the filesystem
+./mgwfsctl stats /mnt/mgw
+# Mark your file as bootable
 ./mgwfsctl setboot /mnt/mgw/somewhere/over/the/rainbow/bootme.img
 ```
 
-The program will emit an error message if the filesystem doesn't support that option. Use ```./mgwfsctl stats /mnt/mgw``` to get information about the mounted image. 
+The program will emit an error message if the filesystem doesn't support that option.
+
+You are not likely to run into it in the field, but filesystems with version 1.7 allow up to 4 different boot images. Which one is booted is typically selected with a 2 position DIP switch on the game board. You would specify which boot file with an additional command line argument:
+
+```
+./mgwfsctl setboot /mnt/mgw/somewhere/over/the/rainbow/bootme.img 3
+```
+Would assign the boot file to slot 3 of the 4 available.
 
 Good luck.
 

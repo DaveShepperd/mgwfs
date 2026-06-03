@@ -292,6 +292,7 @@ extern void freeFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx);
 //extern int writeFreeMapSys(MgwfsSuper_t *super);
 extern int writeFileHeader(MgwfsSuper_t *super, MgwfsInode_t *inode);
 extern int writeDirectory(MgwfsSuper_t *super, MgwfsInode_t *dir);
+extern int allocateRPSectors(const char *title, MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, RwBuff_t *rwBuff, int sectors);
 extern MgwfsInode_t *findUnusedInode(MgwfsSuper_t *super);
 extern int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper);
 extern void addToDirty(const char *title, MgwfsSuper_t *super, int idx);

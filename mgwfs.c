@@ -618,7 +618,7 @@ static int allocateFHSectors( MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, Index
  * fresh RP otherwise, until the copy is fully covered or we run out of space /
  * retrieval-pointer slots. Returns 0 on success or a negative errno.
  */
-static int allocateRPSectors( const char *title, MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, RwBuff_t *rwBuff, int sectors)
+int allocateRPSectors( const char *title, MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, RwBuff_t *rwBuff, int sectors)
 {
 	int altIdx, alts=0;
 
@@ -1020,6 +1020,31 @@ static void markInodeUnused(MgwfsSuper_t *ourSuper, MgwfsInode_t **inodePtr)
 	MgwfsInode_t *inode = *inodePtr;
 	int idx = inode->inode_no;
 	RwBuff_t *rwb = &inode->rwb;
+	IndexSys_t *indexPtr;
+	FsysRetPtr tmp;
+	int ii, jj;
+
+	/* Release whatever sectors were reserved for this inode back to the
+	 * freemap. Since findUnusedInode() now reserves the file-header sectors at
+	 * allocation time (and mgwfs_write() may have reserved data sectors), the
+	 * undo path has to free them or they leak. Mirrors detachInode(). */
+	indexPtr = ourSuper->indexSys + idx;
+	tmp.nblocks = 1;
+	for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
+	{
+		if ( ((tmp.start = indexPtr->lba[ii]) & FSYS_LBA_MASK) )
+		{
+			mgwfsFreeSectors(ourSuper, &tmp, FALSE);
+			indexPtr->lba[ii] = FSYS_EMPTYLBA_BIT;
+		}
+	}
+	for (ii=0; ii < FSYS_MAX_ALTS; ++ii)
+	{
+		FsysRetPtr *rp = inode->fsHeader.pointers[ii];
+		for (jj=0; rp->nblocks && jj < FSYS_MAX_FHPTRS; ++jj, ++rp)
+			mgwfsFreeSectors(ourSuper, rp, TRUE);
+	}
+	addToDirty("markInodeUnused():", ourSuper, FSYS_INDEX_FREE);
 	if ( rwb->buff )
 		free(rwb->buff);
 	memset(rwb,0,sizeof(RwBuff_t));
@@ -1061,12 +1086,13 @@ MgwfsInode_t *findUnusedInode(MgwfsSuper_t *ourSuper)
 		if ( (ourSuper->verbose&(VERBOSE_WRITES)) )
 			fprintf(ourSuper->logFile, "findUnusedInode(): Reused inode %d.\n", idx);
 	}
-	/* If we are claiming a brand new slot at the end (rather than reusing a
-	 * previously freed one), the used count has to grow to include it; the
-	 * index.sys writer only persists entries [0, numInodesUsed). */
-	if ( idx >= ourSuper->numInodesUsed )
-		ourSuper->numInodesUsed = idx + 1;
 	inode = (MgwfsInode_t *)calloc(1,sizeof(MgwfsInode_t));
+	if ( !inode )
+	{
+		fprintf(ourSuper->logFile, "findUnusedInode(): failed to allocate an inode\n");
+		fflush(ourSuper->logFile);
+		return NULL;
+	}
 	inode->inode_no = idx;
 	inode->fsHeader.ctime = time(NULL);
 	inode->fsHeader.id = FSYS_ID_HEADER;
@@ -1074,6 +1100,24 @@ MgwfsInode_t *findUnusedInode(MgwfsSuper_t *ourSuper)
 	 * the header has to carry the same generation or the read path will reject
 	 * the entry ("bad generation") when the volume is next mounted. */
 	inode->fsHeader.generation = 1;
+	/* Reserve the file-header sectors now, at inode-allocation time, rather
+	 * than deferring to write-back. This way an out-of-space (or out-of-free-
+	 * map-entry) condition is reported to fileCreate()/mgwfs_mkdir() as ENOSPC
+	 * instead of being discovered too late and silently dropped at flush. On
+	 * failure nothing is installed and the used count is left untouched, so the
+	 * slot stays available for the next attempt. */
+	if ( allocateFHSectors(ourSuper, inode, ourSuper->indexSys + idx) < 0 )
+	{
+		fprintf(ourSuper->logFile, "findUnusedInode(): no space to reserve header sectors for inode %d; returning ENOSPC\n", idx);
+		fflush(ourSuper->logFile);
+		free(inode);
+		return NULL;
+	}
+	/* If we are claiming a brand new slot at the end (rather than reusing a
+	 * previously freed one), the used count has to grow to include it; the
+	 * index.sys writer only persists entries [0, numInodesUsed). */
+	if ( idx >= ourSuper->numInodesUsed )
+		ourSuper->numInodesUsed = idx + 1;
 	ourSuper->inodeList[idx] = inode;
 	addToDirty("findUnusedInode():", ourSuper, FSYS_INDEX_INDEX);
 	return inode;

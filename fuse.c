@@ -651,6 +651,22 @@ static int mgwfs_write (const char *path, const char *buf, size_t size, off_t of
 					);
 			fflush(ourSuper.logFile);
 		}
+		/* Reserve the on-disk data sectors now, while we can still report a
+		 * shortfall to the caller as ENOSPC, rather than deferring allocation
+		 * to write-back where the failure would be lost. allocateRPSectors()
+		 * only grows the file (it no-ops when the new end fits within the
+		 * sectors already reserved), so plain overwrites don't re-allocate. We
+		 * do this before touching the in-memory buffer so a failure leaves the
+		 * file unchanged. */
+		{
+			int neededSectors = (offset + size + BYTES_PER_SECTOR - 1) / BYTES_PER_SECTOR;
+			if ( neededSectors > (int)inode->fsHeader.clusters )
+			{
+				cpyAmt = allocateRPSectors("mgwfs_write()", &ourSuper, inode, &inode->rwb, neededSectors);
+				if ( cpyAmt < 0 )		/* -ENOSPC */
+					break;
+			}
+		}
 		if ( size + offset > inode->rwb.buffSize )
 		{
 			off_t currOffset = inode->rwb.buffOffset;

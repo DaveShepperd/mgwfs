@@ -302,7 +302,7 @@ extern void addToDirty(const char *title, MgwfsSuper_t *super, int idx);
 #define FREEM_FLAG_MARK_DIRTY	(0x01)
 //#define FREEM_FLAG_TRY_ONLY		(0x02)
 //#define FREEM_FLAG_NO_RESCAN	(0x04)
-extern void mgwfsDumpFreeMap( MgwfsSuper_t *ourSuper, const char *title, const FsysRetPtr *list );
+extern void mgwfsDumpFreeMap( MgwfsSuper_t *ourSuper, const char *title, const FreeMap_t *freeMapPtr );
 extern int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSectors, uint32_t flags );
 extern int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, FsysRetPtr *retp, uint32_t flags);
 /*

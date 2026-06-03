@@ -469,6 +469,11 @@ int main(int argc, char *argv[])
 					rp = (FsysRetPtr *)freeMap->rwBuff.buff;
 					for ( jj = 0; rp->nblocks && jj < freeMap->freeMapEntriesAvail; ++jj, ++rp )
 						++freeMap->freeMapEntriesUsed;
+					if ( (ourSuper.verbose & (VERBOSE_FREEMAP | VERBOSE_VERIFY_FREEMAP | VERBOSE_FREE)) )
+					{
+						fprintf(ourSuper.logFile, "At mount: freemapEntriesUsed=%d, freeMapEntriesAvailable=%d\n", freeMap->freeMapEntriesUsed, freeMap->freeMapEntriesAvail);
+						mgwfsDumpFreeMap(&ourSuper,"At mount:",freeMap);
+					}
 					if ( (ourSuper.verbose & (VERBOSE_FREEMAP | VERBOSE_VERIFY_FREEMAP)) )
 					{
 						if ( (ourSuper.verbose & VERBOSE_VERIFY_FREEMAP) )
@@ -477,7 +482,7 @@ int main(int argc, char *argv[])
 							verifyFreemap(&ourSuper);
 						}
 					}
-					else if ( (ourSuper.verbose&VERBOSE_MINIMUM) )
+					else if ( (ourSuper.verbose & VERBOSE_MINIMUM) )
 					{
 						fprintf(ourSuper.logFile, "Loaded %ld slots (%d bytes) of freemap\n",
 							   (inode->fsHeader.clusters * 512)/sizeof(FsysRetPtr),

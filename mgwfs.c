@@ -589,7 +589,16 @@ static int allocateFHSectors( MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, Index
 		stuff.minSector = FSYS_HB_ALG(altIdx, ourSuper->maxHb);
 		if ( !mgwfsFindFree(ourSuper,&stuff,1,0) )
 		{
+			FreeMap_t *freeMapPtr = &ourSuper->freeMap;
 			int ii;
+			fprintf(ourSuper->logFile,"Failed to allocate 1 sector at min 0x%X for alt %d and file '%s'.\nfreeMapEntriesUsed=%d, freeMapEntriesAvailable=%d\n",
+					stuff.minSector,
+					altIdx,
+					inode->fileName,
+					freeMapPtr->freeMapEntriesUsed,
+					freeMapPtr->freeMapEntriesAvail
+					);
+			mgwfsDumpFreeMap(ourSuper,"allocateFHSectors():",freeMapPtr);
 			for (ii=0; ii < altIdx; ++ii)
 				mgwfsFreeSectors(ourSuper,tmpRPs+ii,0);
 			return -ENOSPC;
@@ -1390,7 +1399,7 @@ void verifyFreemap(MgwfsSuper_t *ourSuper)
 	tmpSuper.inodeList[FSYS_INDEX_FREE] = (MgwfsInode_t *)calloc(1, sizeof(MgwfsInode_t));
 	tmpSuper.inodeList[FSYS_INDEX_FREE]->fsHeader.size = 0;
 	tmpSuper.inodeList[FSYS_INDEX_FREE]->fsHeader.clusters = 10;
-	tmpFreeMap->freeMapEntriesAvail = 2*(tmpSuper.inodeList[FSYS_INDEX_FREE]->fsHeader.clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
+	tmpFreeMap->freeMapEntriesAvail = 8*(tmpSuper.inodeList[FSYS_INDEX_FREE]->fsHeader.clusters*BYTES_PER_SECTOR)/sizeof(FsysRetPtr);
 	ourUsedMap = (FsysRetPtr *)calloc(tmpFreeMap->freeMapEntriesAvail,sizeof(FsysRetPtr));
 	tmpFreeMap->rwBuff.buff = (uint8_t *)ourUsedMap;
 	tmpFreeMap->freeMapEntriesUsed = 0;

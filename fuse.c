@@ -990,10 +990,26 @@ static int mgwfs_mkdir(const char *path, mode_t mode)
 		inode->fnLen = strlen(inode->fileName);
 		inode->fsHeader.type = FSYS_TYPE_DIR;
 		inode->mode = S_IFDIR | 0775;
+		/* Reserve the directory's data sectors now, at mkdir time, so an
+		 * out-of-space condition is reported here as ENOSPC rather than being
+		 * discovered (and silently dropped) at write-back. We grab a generous
+		 * fixed amount: this tool patches existing volumes and no real directory
+		 * comes anywhere near this size, so the directory never needs to grow at
+		 * flush -- which also keeps any later entry additions (mkdir/create
+		 * underneath it) inside this reservation instead of allocating lazily.
+		 * On failure nothing is linked yet, so markInodeUnused() (which frees the
+		 * header sectors findUnusedInode() reserved plus whatever we just got)
+		 * fully undoes the inode. */
+#define MKDIR_DATA_PREALLOC (20)	/* sectors (per copy); ~10KB, far beyond any real directory */
+		if ( allocateRPSectors("mgwfs_mkdir()", super, inode, &inode->rwb, MKDIR_DATA_PREALLOC) < 0 )
+		{
+			markInodeUnused(super, &inode);
+			retVal = -ENOSPC;
+			break;
+		}
 		/* Link it into its parent, then schedule both the new directory (so its
-		 * synthesized "." / ".." entries get packed and written, which also
-		 * allocates its header and data sectors) and the parent (whose contents
-		 * now list the new name) for write-back. */
+		 * synthesized "." / ".." entries get packed and written) and the parent
+		 * (whose contents now list the new name) for write-back. */
 		insertIntoParent(super, parent, inode);
 		addToDirty("mgwfs_mkdir(): parent", super, parentIdx);
 		addToDirty("mgwfs_mkdir(): new dir", super, inode->inode_no);

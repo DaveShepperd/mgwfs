@@ -1015,7 +1015,7 @@ int fileRename(const char *title, MgwfsSuper_t *ourSuper, const char *oldPath, c
 	return -EIO;
 }
 
-static void markInodeUnused(MgwfsSuper_t *ourSuper, MgwfsInode_t **inodePtr)
+void markInodeUnused(MgwfsSuper_t *ourSuper, MgwfsInode_t **inodePtr)
 {
 	MgwfsInode_t *inode = *inodePtr;
 	int idx = inode->inode_no;

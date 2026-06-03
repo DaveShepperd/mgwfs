@@ -389,30 +389,30 @@ static int mgwfs_statfs(const char *path, struct statvfs *stp)
 {
 	FsysRetPtr *rp;
 	FreeMap_t *freeMap = &ourSuper.freeMap;
+	uint64_t big;
 	
 	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 	{
 		fprintf(ourSuper.logFile, "FUSE mgwfs_statfs('%s',%p\n", path, stp);
 		fflush(ourSuper.logFile);
 	}
-//	memset(stp,0,sizeof(statvfs));
+	if ( options.read_write )
+		updateAllMetaData("mgwfs_statfs()",&ourSuper);
 	stp->f_type = ANON_INODE_FS_MAGIC;
 	stp->f_bsize = BLOCK_SIZE; //BYTES_PER_SECTOR;
-	stp->f_blocks = (ourSuper.homeBlk.max_lba*BYTES_PER_SECTOR)/BLOCK_SIZE;
+	big = ourSuper.homeBlk.max_lba;
+	stp->f_blocks = (big*BYTES_PER_SECTOR)/BLOCK_SIZE;
+	stp->f_bfree = 0;
 	rp = (FsysRetPtr *)freeMap->rwBuff.buff;
-	while ( rp && rp < (FsysRetPtr *)freeMap->rwBuff.buff + freeMap->freeMapEntriesAvail && rp->nblocks )
+	while ( rp && rp < (FsysRetPtr *)freeMap->rwBuff.buff + freeMap->freeMapEntriesUsed && rp->nblocks )
 	{
 		stp->f_bfree += rp->nblocks;
 		++rp;
 	}
-	stp->f_bavail = stp->f_blocks
-		- (1+
-		   (( ourSuper.inodeList[FSYS_INDEX_INDEX]->fsHeader.size
-			 +ourSuper.inodeList[FSYS_INDEX_FREE]->fsHeader.size
-			 +ourSuper.inodeList[FSYS_INDEX_ROOT]->fsHeader.size
-			 )
-			+(BLOCK_SIZE-1)
-			)/BLOCK_SIZE);
+	big = stp->f_bfree;
+	stp->f_bfree = (big*BYTES_PER_SECTOR)/BLOCK_SIZE;
+	stp->f_bavail = stp->f_bfree;
+	stp->f_files = ourSuper.numInodesUsed;
 	stp->f_favail = ourSuper.numInodesAvailable;
 	stp->f_ffree = stp->f_favail - ourSuper.numInodesUsed;
 	stp->f_namemax = MGWFS_FILENAME_MAXLEN;

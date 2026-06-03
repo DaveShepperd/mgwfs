@@ -591,8 +591,8 @@ typedef struct home_block {
 /* Description of retrieval pointer */
 
 typedef struct file_retptr {
-    uint32_t start;		/* starting lba */
-    uint32_t nblocks;		/* number of contigious clusters */
+    uint32_t start;			/* starting lba */
+    int32_t nblocks;		/* number of contigious clusters */
 # if defined(FSYS_REPEAT_SKIP) && FSYS_REPEAT_SKIP
     uint32_t repeat;		/* number of times to repeat the nblocks/skip pair */
     uint32_t skip;			/* number of clusters to skip */

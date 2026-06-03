@@ -429,8 +429,8 @@ int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, IndexS
 
 int readWholeFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr)
 {
-	off64_t sector;
-	int fd, ptrIdx=0, retSize=0, blkLimit;
+	off64_t sector, blkLimit;
+	int fd, ptrIdx=0, retSize=0;
 	ssize_t rdSts, limit;
 	
 	fd = ourSuper->fd;
@@ -448,7 +448,7 @@ int readWholeFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int 
 			blkLimit = ((blkLimit*BYTES_PER_SECTOR-limit)+BYTES_PER_SECTOR-1)/512;
 		if ( (ourSuper->verbose&VERBOSE_READ) )
 		{
-			fprintf(ourSuper->logFile,"Attempting to read %ld bytes for %s. ptrIdx=%d, sector=0x%X, nblocks=%d (limited blocks=%d)\n",
+			fprintf(ourSuper->logFile,"Attempting to read %ld bytes for %s. ptrIdx=%d, sector=0x%X, nblocks=%d (limited blocks=%ld)\n",
 			   limit, title, ptrIdx, retPtr->start, retPtr->nblocks, blkLimit);
 		}
 		if ( lseek64(fd,(sector+ourSuper->baseSector)*BYTES_PER_SECTOR,SEEK_SET) == (off64_t)-1 )
@@ -707,8 +707,8 @@ int allocateRPSectors( const char *title, MgwfsSuper_t *ourSuper, MgwfsInode_t *
 
 static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode_t *inode)
 {
-	off64_t sector;
-	int needFH, ptrIdx=0, retSize=0, blkLimit;
+	off64_t sector, blkLimit;
+	int needFH, ptrIdx=0, retSize=0;
 	ssize_t limit, wrSts;
 	FsysRetPtr *retPtr;
 	int bytes, copyCnt, copies;
@@ -1934,7 +1934,8 @@ int writeFileHeader(MgwfsSuper_t *super, MgwfsInode_t *inode)
 	for (alts=0; alts < FSYS_MAX_ALTS; ++alts)
 	{
 		ssize_t sts;
-
+		off64_t bigSector;
+		
 		/* An empty/absent alternate has no sector to write to. */
 		if ( !lbas->lba[alts] || (lbas->lba[alts] & FSYS_EMPTYLBA_BIT) )
 			continue;
@@ -1944,10 +1945,11 @@ int writeFileHeader(MgwfsSuper_t *super, MgwfsInode_t *inode)
 			fprintf(super->logFile, "writeFileHeader(): Writing file header for '%s' (inode %d) at sector 0x%X\n",
 					inode->fileName, inode->inode_no, sector);
 		}
-		if ( lseek64(fd, (off64_t)sector*BYTES_PER_SECTOR, SEEK_SET) == (off64_t)-1 )
+		bigSector = sector;
+		if ( lseek64(fd, bigSector*BYTES_PER_SECTOR, SEEK_SET) == (off64_t)-1 )
 		{
-			fprintf(super->errFile, "writeFileHeader(): Failed to lseek to sector 0x%X for '%s': %s\n",
-					sector, inode->fileName, strerror(errno));
+			fprintf(super->errFile, "writeFileHeader(): Failed to lseek to sector 0x%lX for '%s': %s\n",
+					bigSector, inode->fileName, strerror(errno));
 			continue;
 		}
 		sts = write(fd, (uint8_t *)&inode->fsHeader, sizeof(FsysHeader));

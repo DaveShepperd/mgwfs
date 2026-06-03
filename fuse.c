@@ -44,6 +44,8 @@ static int mgwfs_getattr(const char *path, struct stat *stbuf,
 		fprintf(ourSuper.logFile, "FUSE mgwfs_getattr(path='%s',stbuf)\n", path);
 		fflush(ourSuper.logFile);
 	}
+	if ( options.read_write )
+		updateAllMetaData("mgwfs_getattr()",&ourSuper);
 	memset(stbuf, 0, sizeof(struct stat));
 	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	if ( (idx = findInode(&ourSuper, FSYS_INDEX_ROOT, path)) <= 0 )
@@ -105,6 +107,8 @@ static int mgwfs_readdir(const char *path,
 		fprintf(ourSuper.logFile, "FUSE mgwfs_readdir(path='%s',buf=%p,offset=%ld,fi,flags=0x%X)\n", path, buf, offset,flags);
 		fflush(ourSuper.logFile);
 	}
+	if ( options.read_write )
+		updateAllMetaData("mgwfs_readdir()",&ourSuper);
 	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	idx = findInode(&ourSuper,FSYS_INDEX_ROOT,path);
 	if (!idx)
@@ -171,6 +175,8 @@ static int mgwfs_open(const char *path, struct fuse_file_info *fi)
 	
 	if ( (ourSuper.verbose&VERBOSE_FUSE_CMD) )
 		fprintf(ourSuper.logFile, "FUSE mgwfs_open(path='%s',fi->fh=%ld, fi->flags=0x%X)\n", path, fi->fh, fi->flags);
+	if ( options.read_write )
+		updateAllMetaData("mgwfs_open()",&ourSuper);
 	do
 	{
 		LOCK_IT("rdMutex",&ourSuper,&rdMutex);
@@ -584,6 +590,7 @@ static int mgwfs_unlink(const char *path)
 	{
 		retVal = detachInode(super, idx, path);
 	}
+	updateAllMetaData("mgwfs_unlink()", &ourSuper);
 	fflush(super->logFile);
 	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	return retVal;
@@ -915,6 +922,7 @@ static int mgwfs_rename (const char *oldName, const char *newName, unsigned int 
 	free(parentPath);
 	fflush(super->logFile);
 	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	updateAllMetaData("mgwfs_rename()",&ourSuper);
 	return retVal;
 }
 
@@ -1020,6 +1028,7 @@ static int mgwfs_mkdir(const char *path, mode_t mode)
 		fprintf(super->logFile, "FUSE mgwfs_mkdir('%s') returned %d\n", path, retVal);
 	fflush(super->logFile);
 	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	updateAllMetaData("mgwfs_mkdir()",&ourSuper);
 	return retVal;
 }
 
@@ -1070,6 +1079,7 @@ static int mgwfs_rmdir(const char *path)
 		fprintf(super->logFile, "FUSE mgwfs_rmdir('%s') returned %d\n", path, retVal);
 	fflush(super->logFile);
 	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	updateAllMetaData("mgwfs_rmdir()",&ourSuper);
 	return retVal;
 }
 
@@ -1308,6 +1318,7 @@ static int mgwfst_utimens(const char *path, const struct timespec tv[2],
 		}
 	}
 	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	updateAllMetaData("mgwfst_utimens()",&ourSuper);
 	return ret;
 }
 
@@ -1347,6 +1358,7 @@ static int mgwfs_chmod(const char *path, mode_t mode, struct fuse_file_info *fi)
 	}
 	/* No perms field on media; accept and ignore the requested mode. */
 	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+//	updateAllMetaData("mgwfst_chmod()",&ourSuper);
 	return ret;
 }
 
@@ -1379,6 +1391,7 @@ static int mgwfs_chown(const char *path, uid_t uid, gid_t gid, struct fuse_file_
 	}
 	/* No owner/group field on media; accept and ignore the requested ids. */
 	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+//	updateAllMetaData("mgwfst_chown()",&ourSuper);
 	return ret;
 }
 

@@ -15,9 +15,9 @@ its file header, the freemap.sys (if changed) and index.sys (if changed).
 The buffer and its associated inode are simply free()'d.
 
 At mount time the 3 home blocks are found and read and compared. One good
-copy is maintained in MgwfsSuper_t ptr->homeBlock. index.sys file is read. Pointers to which can be found
-in the home block. all file headers (FH's) are read into a malloc()'d buffer
-(MgwfsSuper_t ptr->indexSys)
+copy is maintained in MgwfsSuper_t ptr->homeBlock. index.sys file is read.
+Pointers to which can be found in the home block. All file headers (FH's)
+are read into a malloc()'d buffer (MgwfsSuper_t ptr->indexSys)
 
 Things that need be done to affect a file write:
 - Record the instance of inode that changed.
@@ -32,6 +32,17 @@ Things that need be done to affect a file write:
 - If the freemap changed as a result of any RP changes, record
   the instance of the freemap inode change (rinse and repeat).
 
-Things that need be done to affect a directory change:
+Directories are unpacked into memory at mount time. This provides
+filenames for each and the name is stored in the inode. Changes to directories
+are only allowed if mounted read/write. An inplace rename simply replaces
+the filename with the new one and the directory inode is marked dirty.
+A rename to a different directory resets the links as well as changes
+and both the old and new directories are marked dirty. New file creation
+grabs an unused inode, saves the filename, sets the directory links as
+appropriate and marks the new inode and the parent directory inodes dirty.
+Subsequent writes to the newly created file just put data into a malloc'd
+buffer. When the file is closed, an appropriate number of RP's are created,
+the buffer is copied to disk and the inode is marked dirty so the file's
+file header is written to disk too.
 
 

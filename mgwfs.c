@@ -233,7 +233,11 @@ static int getHBSector(MgwfsSuper_t *ourSuper, off64_t sector, FsysHomeBlock *hb
 				strerror(errno));
 		return 2;
 	}
-	if ( hb->id == FSYS_ID_HOME && hb->hb_size <= (int)sizeof(FsysHomeBlock))
+	// Do some preliminary HB validity checking
+	if (    hb->id == FSYS_ID_HOME 
+	     && hb->hb_size >= (int)sizeof(FsysHomeBlock_v1_1)
+		 && hb->hb_size <= (int)sizeof(FsysHomeBlock)
+		)
 	{
 		cksum = 0;
 		if ( hb->hb_size < (int)sizeof(FsysHomeBlock) )
@@ -256,8 +260,6 @@ static int getHBSector(MgwfsSuper_t *ourSuper, off64_t sector, FsysHomeBlock *hb
 		{
 			return 0;
 		}
-		if ( hb->id != FSYS_ID_HOME )
-			fprintf(errf,"Homeblock ID doesn't match. Found 0x%X, expected 0x%lX\n", hb->id, FSYS_ID_HOME);
 		if ( hb->hb_major != 1 )
 			fprintf(errf,"Homeblock hb_major doesn't match. Found %d, expected %d\n", hb->hb_major, 1);
 		if ( hb->hb_minor < 1 || hb->hb_minor > 7)

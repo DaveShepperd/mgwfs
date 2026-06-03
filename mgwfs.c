@@ -848,13 +848,14 @@ int fileFlush(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp)
 	return 0;
 }
 
-static uint8_t *insertFilenameIntoDir(uint8_t *ptr, int inodeIdx, const char *fileName)
+static uint8_t *insertFilenameIntoDir(uint8_t *ptr, const MgwfsInode_t *inode, const char *fileName)
 {
 	int fnLen = strlen(fileName);
+	int inodeIdx = inode->inode_no;
 	*ptr++ = inodeIdx&0xFF;
 	*ptr++ = (inodeIdx>>8)&0xFF;
 	*ptr++ = (inodeIdx>>16)&0xFF;
-	*ptr++ = 1;	// Generation number is always 1 for now
+	*ptr++ = inode->fsHeader.generation;
 	*ptr++ = fnLen+1;
 	memcpy(ptr,fileName,fnLen);
 	ptr += fnLen;
@@ -1608,6 +1609,8 @@ int unpackDir(MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, int nest)
 		dirContents += 3;
 		/* Get the generation number */
 		gen = *dirContents++;
+		if ( dirContents >= mem+inode->fsHeader.size )
+			break;				/* off end of buffer */
 		/* Get the null terminated filename length */
 		txtLen = *dirContents++;
 		/* If the index is 0, it's nfg */
@@ -2004,7 +2007,7 @@ int writeDirectory(MgwfsSuper_t *super, MgwfsInode_t *dir)
 	 * entry by one byte; near a sector boundary the packed contents then ran
 	 * past the rounded-up allocation and corrupted the heap. */
 #define DIR_ENTRY_BYTES(namelen) (5 + (namelen) + 1)
-	siz = DIR_ENTRY_BYTES(2) + DIR_ENTRY_BYTES(1);	/* ".." and "." */
+	siz = DIR_ENTRY_BYTES(2) + DIR_ENTRY_BYTES(1) + 4;	/* "..", "." and trailing fid of 0 */
 	nxt = dir->idxChildTop;
 	top = super->inodeList[dir->inode_no];
 	/* An empty directory has no children (idxChildTop == 0); it still gets the
@@ -2030,15 +2033,19 @@ int writeDirectory(MgwfsSuper_t *super, MgwfsInode_t *dir)
 	}
 	dir->rwb.buffSize = alloc;
 	ptr = dir->rwb.buff;
-	ptr = insertFilenameIntoDir(ptr, dir->idxParentInode, "..");
-	ptr = insertFilenameIntoDir(ptr, dir->inode_no, ".");
+	ptr = insertFilenameIntoDir(ptr, super->inodeList[dir->idxParentInode], "..");
+	ptr = insertFilenameIntoDir(ptr, super->inodeList[dir->inode_no], ".");
 	nxt = dir->idxChildTop;
 	while ( nxt )
 	{
 		child = super->inodeList[nxt];
-		ptr = insertFilenameIntoDir(ptr, nxt, child->fileName);
+		ptr = insertFilenameIntoDir(ptr, child, child->fileName);
 		nxt = child->idxNextInode;
 	}
+	*ptr++ = 0;	/* game code might look for an FID of 0 as an end of list */
+	*ptr++ = 0;
+	*ptr++ = 0;
+	*ptr++ = 0; /* generation number is ignored, but still must be present */
 	dir->rwb.buffUsed = ptr - dir->rwb.buff;
 	dir->rwb.buffOffset = dir->rwb.buffUsed;
 	/* The directory is packed after updateAllMetaData() ran its size = buffUsed

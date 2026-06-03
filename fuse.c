@@ -377,7 +377,7 @@ static int mgwfs_release(const char *path, struct fuse_file_info *fi)
 		
 		LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 		fhp = getFuseFHidx(&ourSuper,fi->fh);
-		if ( --fhp->instances <= 0 )
+		if ( fhp && --fhp->instances <= 0 )
 		{
 			sts = fileClose("mgwfs_release():",&ourSuper,fhp);
 			freeFuseFHidx(&ourSuper, fi->fh);

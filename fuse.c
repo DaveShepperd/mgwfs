@@ -1453,7 +1453,20 @@ static int mgwfs_ioctl(const char *path, int cmd, void *arg,
 			st->freeMapEntriesAvail = ourSuper.freeMap.freeMapEntriesAvail;
 			st->numInodesUsed = ourSuper.numInodesUsed;
 			st->numInodesAvailable = ourSuper.numInodesAvailable;
-			st->numDirtyInodes = ourSuper.numDirtyInodes;
+			st->numDirtyInodes = ourSuper.numDirtyInodes + ((ourSuper.specialDirtys&SPECIAL_DIRTY_INDEX)?1:0) + ((ourSuper.specialDirtys&SPECIAL_DIRTY_FREE)?1:0);
+			memset(st->listOfDirtyInodes, 0, sizeof(st->listOfDirtyInodes));
+			if ( st->numDirtyInodes && ourSuper.dirtyInodes )
+			{
+				int lim = st->numDirtyInodes;
+				if ( lim > MAX_DIRTY_INODE_LIST )
+					lim = MAX_DIRTY_INODE_LIST;
+				for ( ii = 0; ii < lim; ++ii )
+					st->listOfDirtyInodes[ii] = ourSuper.dirtyInodes[ii];
+				if ( ii < MAX_DIRTY_INODE_LIST && ((ourSuper.specialDirtys&SPECIAL_DIRTY_INDEX)?1:0) )
+					st->listOfDirtyInodes[ii++] = FSYS_INDEX_INDEX;
+				if ( ii < MAX_DIRTY_INODE_LIST && ((ourSuper.specialDirtys&SPECIAL_DIRTY_FREE)?1:0) )
+					st->listOfDirtyInodes[ii++] = FSYS_INDEX_FREE;
+			}
 			st->verbose = ourSuper.verbose;
 			memset(st->bootFiles, 0, sizeof(st->bootFiles));
 			if ( ourSuper.homeBlk.hb_major > 1 || ( ourSuper.homeBlk.hb_major == 1 && ourSuper.homeBlk.hb_minor >= 3 ) )

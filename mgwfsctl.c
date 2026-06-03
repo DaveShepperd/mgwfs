@@ -18,6 +18,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <inttypes.h>
+#include <sys/vfs.h>
 
 #include "mgwfsctl.h"
 
@@ -57,9 +58,26 @@ static int openPath(const char *path)
 static int doStats(const char *path)
 {
 	MgwfsIoctlStats_t st;
+	struct statfs stfs;
+	int ii,lim;
+
 	int fd = openPath(path);
 	if ( fd < 0 )
 		return 1;
+	memset(&stfs,0,sizeof(stfs));
+	if ( statfs(path,&stfs) >= 0 )
+	{
+		printf("fs: f_type          : 0x%08lX\n", stfs.f_type);
+		printf("fs: f_bsize         : %10" PRIi64 "\n", stfs.f_bsize);
+		printf("fs: f_blocks        : %10" PRIi64 "\n", stfs.f_blocks);
+		printf("fs: f_bfree         : %10" PRIi64 "\n", stfs.f_bfree);
+		printf("fs: f_bavail        : %10" PRIi64 "\n", stfs.f_bavail);
+		printf("fs: f_files         : %10" PRIi64 "\n", stfs.f_files);
+		printf("fs: f_ffree         : %10" PRIi64 "\n", stfs.f_ffree);
+		printf("fs: f_namelen       : %10" PRIi64 "\n", stfs.f_namelen);
+		printf("fs: f_frsize        : %10" PRIi64 "\n", stfs.f_frsize);
+		printf("fs: f_flags         : 0x%08lX\n", stfs.f_flags);
+	}
 	memset(&st, 0, sizeof(st));
 	if ( ioctl(fd, MGWFS_IOC_GETSTATS, &st) < 0 )
 	{
@@ -74,12 +92,25 @@ static int doStats(const char *path)
 	printf("maxAlts             : %" PRIu16 "\n", st.maxAlts);
 	printf("defExtend           : %" PRIu32 "\n", st.defExtend);
 	printf("sectorsUsed         : %" PRIu32 "\n", st.sectorsUsed);
+	printf("sectorsFree         : %" PRIu32 "\n", st.sectorsFree);
 	printf("sectorsLost         : %" PRIu32 "\n", st.sectorsLost);
 	printf("freeMapEntriesUsed  : %" PRId32 "\n", st.freeMapEntriesUsed);
 	printf("freeMapEntriesAvail : %" PRId32 "\n", st.freeMapEntriesAvail);
 	printf("numInodesUsed       : %" PRId32 "\n", st.numInodesUsed);
 	printf("numInodesAvailable  : %" PRId32 "\n", st.numInodesAvailable);
 	printf("numDirtyInodes      : %" PRId32 "\n", st.numDirtyInodes);
+	lim = st.numDirtyInodes;
+	if ( lim > MAX_DIRTY_INODE_LIST )
+		lim = MAX_DIRTY_INODE_LIST;
+	if ( lim )
+	{
+		printf("    Dirty Inode ID's: ");
+		for ( ii = 0; ii < lim; ++ii )
+			printf(" %d", st.listOfDirtyInodes[ii]);
+		if ( ii < st.numDirtyInodes )
+			printf(" (+%d more)", st.numDirtyInodes-ii);
+		printf("\n");
+	}
 	printf("verbose             : 0x%08" PRIx32 "\n", st.verbose);
 	if ( st.hbMajor == 1 && st.hbMinor < 3 )
 		printf("Version 1.%d filesystem has boot hardcoded to CODE/vmunix\n", st.hbMinor);
@@ -91,7 +122,6 @@ static int doStats(const char *path)
 		}
 		else
 		{
-			int ii;
 			for ( ii = 0; ii < MAX_NUM_BOOT_FILES; ++ii )
 				printf("Boot file %d       : '%s'\n", ii, st.bootFiles[ii]);
 		}

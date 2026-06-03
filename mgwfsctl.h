@@ -18,8 +18,10 @@
  * verbose flags without remounting. cmd encodes the struct size so libfuse
  * hands us a correctly sized data buffer (no FUSE_IOCTL_UNRESTRICTED retry).
  */
-#define MAX_NUM_BOOT_FILES	(4)
-#define MAX_BOOT_FN_PATH	(128)	/* arbitrary length. Will be plenty long enough for any game produced */
+#define MAX_NUM_BOOT_FILES	 (4)
+#define MAX_BOOT_FN_PATH	 (128)	/* arbitrary length. Will be plenty long enough for any game produced */
+#define MAX_DIRTY_INODE_LIST (4)
+
 typedef struct
 {
 	uint16_t hbMajor;			/* Major version of home block */
@@ -35,6 +37,7 @@ typedef struct
 	int32_t  numInodesUsed;		/* inodes in use */
 	int32_t  numInodesAvailable;	/* inodes allocated */
 	int32_t  numDirtyInodes;	/* inodes pending write-back */
+	int32_t  listOfDirtyInodes[MAX_DIRTY_INODE_LIST];
 	uint32_t verbose;		/* current verbose flags */
 	char bootFiles[MAX_NUM_BOOT_FILES][MAX_BOOT_FN_PATH];
 } MgwfsIoctlStats_t;

@@ -216,6 +216,9 @@ static int getHBSector(MgwfsSuper_t *ourSuper, off64_t sector, FsysHomeBlock *hb
 	size_t sts;
 	uint32_t options, cksum, *csp;
 	FILE *errf = ourSuper->logFile;
+	uint32_t lclSector[BYTES_PER_SECTOR/4];
+	FsysHomeBlock *hbPtr;
+	const FsysHomeBlock_v1_0 *hb0Ptr;
 	
 	if ( (ourSuper->verbose&VERBOSE_HOME) )
 		fprintf(ourSuper->logFile, "Attempting to read home block at sector 0x%lX\n", sector);
@@ -224,40 +227,72 @@ static int getHBSector(MgwfsSuper_t *ourSuper, off64_t sector, FsysHomeBlock *hb
 		fprintf(errf,"Failed to seek to sector 0x%lX: %s\n", sector, strerror(errno));
 		return 1;
 	}
-	sts = read(fd, hb, sizeof(FsysHomeBlock));
-	if ( sts != sizeof(FsysHomeBlock) )
+	sts = read(fd, (uint8_t *)lclSector, BYTES_PER_SECTOR);
+	if ( sts != BYTES_PER_SECTOR )
 	{
-		fprintf(errf,"Failed to read %ld byte home block at sector 0x%lX: %s\n",
-				sizeof(FsysHomeBlock),
+		fprintf(errf,"Failed to read %d byte home block at sector 0x%lX: %s\n",
+				BYTES_PER_SECTOR,
 				sector,
 				strerror(errno));
 		return 2;
 	}
+	cksum = 0;
+	csp = lclSector;
+	for ( jj = 0; jj < BYTES_PER_SECTOR/4; ++jj )
+		cksum += *csp++;
+	*ckSumP = cksum;
 	// Do some preliminary HB validity checking
-	if (    hb->id == FSYS_ID_HOME 
-	     && hb->hb_size >= (int)sizeof(FsysHomeBlock_v1_1)
-		 && hb->hb_size <= (int)sizeof(FsysHomeBlock)
+	hbPtr = (FsysHomeBlock *)lclSector;
+	hb0Ptr = (FsysHomeBlock_v1_0 *)lclSector;
+	if (    hbPtr->id == FSYS_ID_HOME
+		 && hbPtr->hb_major == FSYS_VERSION_HB_MAJOR
+		 && hbPtr->hb_minor >= 1
+		 && hbPtr->hb_minor <= FSYS_VERSION_HB_MINOR
+	     && hbPtr->hb_size >= (int)sizeof(FsysHomeBlock_v1_0)
+		 && hbPtr->hb_size <= (int)sizeof(FsysHomeBlock)
+		 && !cksum
 		)
 	{
-		cksum = 0;
-		if ( hb->hb_size < (int)sizeof(FsysHomeBlock) )
-			 memset((uint8_t *)hb + hb->hb_size, 0, sizeof(FsysHomeBlock)-hb->hb_size);
-		csp = (uint32_t *)hb;
-		for ( jj = 0; jj < hb->hb_size / sizeof(uint32_t); ++jj )
-			cksum += *csp++;
-		*ckSumP = cksum;
-		options = hb->features & hb->options & (FSYS_FEATURES_CMTIME | FSYS_FEATURES_EXTENSION_HEADER | FSYS_FEATURES_ABTIME);
+		if ( hb0Ptr->hb_size == (int)sizeof(FsysHomeBlock_v1_0) )
+		{
+			/* This is technically version 1.0 of the homeblock */
+			/* due to a screwup on my part, the structure needs */
+			/* unique handling */
+			memcpy(hb, hb0Ptr, offsetof(FsysHomeBlock_v1_0, ctime));
+			/* Copy the individual members that are in a unique position in v1.0 */
+			hb->ctime = hb0Ptr->ctime;
+			hb->mtime = hb0Ptr->mtime;
+			hb->atime = hb0Ptr->atime;
+			hb->btime = hb0Ptr->btime;
+			hb->chksum = hb0Ptr->chksum;
+			hb->features = hb0Ptr->features;
+			hb->options = hb0Ptr->options;
+			memcpy(hb->index, hb0Ptr->index, sizeof(uint32_t)*FSYS_MAX_ALTS); /* up to n ptrs to index.sys files */
+			memset(hb->boot, 0, sizeof(FsysHomeBlock)-offsetof(FsysHomeBlock,boot));
+			options = hb0Ptr->features & hb0Ptr->options;
+		}
+		else
+		{
+			/* All the other versions are ok as they are */
+			memcpy(hb, lclSector, sizeof(FsysHomeBlock));
+			options = hb->features & hb->options;
+		}
+		options &= (FSYS_FEATURES_CMTIME | FSYS_FEATURES_EXTENSION_HEADER | FSYS_FEATURES_ABTIME);
 		if (    hb->id == FSYS_ID_HOME
-			 && hb->hb_major == 1
-			 && (hb->hb_minor >= 1 && hb->hb_minor <= 7)
-			 && hb->rp_major == 1
-			 && hb->rp_minor == 1
-			 && !cksum
+			 && hb->rp_major == FSYS_VERSION_RP_MAJOR
+			 && hb->rp_minor == FSYS_VERSION_RP_MINOR
 			 && options == FSYS_FEATURES_CMTIME
 			 && hb->fh_size == (int)sizeof(FsysHeader)
 			 && hb->maxalts == FSYS_MAX_ALTS
+			 && hb->hb_size >= (int)sizeof(FsysHomeBlock_v1_0)
 		   )
 		{
+			if ( hb->hb_size > sizeof(FsysHomeBlock_v1_0) )
+			{
+				int fill = sizeof(FsysHomeBlock) - hb->hb_size;
+				if ( fill )
+					memset((uint8_t *)hb + hb->hb_size, 0, fill);
+			}
 			return 0;
 		}
 		if ( hb->hb_major != 1 )
@@ -300,7 +335,7 @@ int getHomeBlock(MgwfsSuper_t *ourSuper, off64_t maxHbSector, off64_t diskSizeIn
 		{
 			if ( ii && res == 3 && lclHomes[0].hb_major == 1 && lclHomes[0].hb_minor == 1 )
 			{
-				/* old systems require a scan for the next HB */
+				/* very old systems require a scan for the next HB */
 				while ( (sector=altSector) < diskSizeInSectors )
 				{
 					ourSuper->homeLbas[ii] = sector;
@@ -716,7 +751,7 @@ int allocateRPSectors( const char *title, MgwfsSuper_t *ourSuper, MgwfsInode_t *
 	return 0;
 }
 
-static int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode_t *inode)
+int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode_t *inode)
 {
 	off64_t sector, blkLimit;
 	int needFH, ptrIdx=0, retSize=0;
@@ -992,7 +1027,7 @@ int updateAllMetaData(const char *title, MgwfsSuper_t *ourSuper)
 			sts = writeWholeFile("updateAllMetaData()", ourSuper, inode);
 			LOCK_IT("wrMutex", ourSuper, &wrMutex);
 		}
-		if ( inodeIdx != FSYS_INDEX_FREE && inode->rwb.buff )
+		if ( inodeIdx > FSYS_INDEX_FREE && inode->rwb.buff )
 			free(inode->rwb.buff);
 		memset(&inode->rwb,0,sizeof(inode->rwb));
 		if ( sts < 0 )

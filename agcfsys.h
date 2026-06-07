@@ -408,6 +408,34 @@ typedef struct {
     uint16_t rp_size;             /* size in bytes of retrieval pointer struct */
     uint16_t cluster;             /* blocks per cluster */
     uint16_t maxalts;             /* number of alternates on this volume */
+    uint32_t ctime;               /* volume creation date/time */
+    uint32_t mtime;               /* volume modification date/time */
+    uint32_t atime;               /* volume access date/time */
+    uint32_t btime;               /* volume backup date/time */
+    uint32_t chksum;              /* home block checksum */
+    uint32_t features;            /* file system features */
+    uint32_t options;             /* file system options */
+    uint32_t index[FSYS_MAX_ALTS]; /* up to n ptrs to index.sys files */
+} FsysHomeBlock_v1_0;			  /* very old version of home block (probably only S.F. Rush) */
+
+typedef struct {
+    uint32_t id;                   /* block ID type. s/b FEEDF00D */
+    uint16_t hb_minor;            /* home block minor version */
+    uint16_t hb_major;            /* home block major version */
+    uint16_t hb_size;             /* size in bytes of home block struct */
+    uint16_t fh_minor;            /* file header minor version */
+    uint16_t fh_major;            /* file header major version */
+    uint16_t fh_size;             /* size in bytes of file header struct */
+    uint16_t fh_ptrs;             /* number of retrieval pointers in a file header */
+    uint16_t efh_minor;           /* extension file header minor version */
+    uint16_t efh_major;           /* extension file header major version */
+    uint16_t efh_size;            /* size in bytes of extension file header struct */
+    uint16_t efh_ptrs;            /* number of retrieval pointers in an extension file header */
+    uint16_t rp_minor;            /* retrieval pointer minor version */
+    uint16_t rp_major;            /* retrieval pointer major version */
+    uint16_t rp_size;             /* size in bytes of retrieval pointer struct */
+    uint16_t cluster;             /* blocks per cluster */
+    uint16_t maxalts;             /* number of alternates on this volume */
 	uint32_t def_extend;		  /* default number of clusters to extend files */
     uint32_t ctime;               /* volume creation date/time */
     uint32_t mtime;               /* volume modification date/time */

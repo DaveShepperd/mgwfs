@@ -36,14 +36,16 @@ static void usage(FILE *fp)
 		"  getverbose <path>           print the current verbose flags (hex)\n"
 		"  setverbose <path> <v>       set the verbose flags; <v> may be decimal, 0x.. hex, or 0.. octal\n"
 		"  setboot <path> [<v>]        set the file pointed to by 'path' to boot image 'v' (v can be 0, 1, 2 or 3, defaults to 0)\n"
+		"  checksums <path>            compute checksums and store the results in <path>\n"
 		"\n"
 		"Examples:\n"
-		"  %s stats /mnt/mgwfs\n"
-		"  %s getverbose /mnt/mgwfs/.\n"
-		"  %s setverbose /mnt/mgwfs 0x40000\n"
-		"  %s setboot /mnt/mgwfs/FOO/bar\n"
-		"  %s setboot /mnt/mgwfs/SOMEWHERE/rainbow 1\n"
-		, Prog, Prog, Prog, Prog, Prog, Prog);
+		"  %s stats /mnt/mgw\n"
+		"  %s getverbose /mnt/mgw/.\n"
+		"  %s setverbose /mnt/mgw 0x40000\n"
+		"  %s setboot /mnt/mgw/FOO/bar\n"
+		"  %s setboot /mnt/mgw/SOMEWHERE/rainbow 1\n"
+		"  %s checksums /mnt/mgw/diags/checksums\n"
+		, Prog, Prog, Prog, Prog, Prog, Prog, Prog);
 }
 
 /* Open a path inside the mount. O_RDONLY is enough; the ioctl does the work. */
@@ -87,7 +89,10 @@ static int doStats(const char *path)
 	}
 	close(fd);
 	printf("hbMajor             : %" PRIu16 "\n", st.hbMajor);
-	printf("hbMinor             : %" PRIu16 "\n", st.hbMinor);
+	if ( st.hbSize == 76 )
+		printf("hbMinor             : %" PRIu16 " (actually, it's version 1.0)\n", st.hbMinor);
+	else
+		printf("hbMinor             : %" PRIu16 "\n", st.hbMinor);
 	printf("hbSize              : %" PRIu16 "\n", st.hbSize);
 	printf("maxAlts             : %" PRIu16 "\n", st.maxAlts);
 	printf("defExtend           : %" PRIu32 "\n", st.defExtend);
@@ -220,6 +225,24 @@ static int doSetBoot(const char *path, int bootNum)
 	return 0;
 }
 
+static int doChecksums(const char *path)
+{
+	int v=0,fd;
+
+	errno = 0;
+	fd = openPath(path);
+	if ( fd < 0 )
+		return 1;
+	if ( ioctl(fd, MGWFS_IOC_CHECKSUMS, &v) < 0 )
+	{
+		fprintf(stderr, "%s: MGWFS_IOC_CHECKSUMS on '%s' failed: %s\n", Prog, path, strerror(errno));
+		close(fd);
+		return 1;
+	}
+	close(fd);
+	return 0;
+}
+
 int main(int argc, char *argv[])
 {
 	const char *cmd;
@@ -241,6 +264,8 @@ int main(int argc, char *argv[])
 		return doStats(argv[2]);
 	if ( !strcmp(cmd, "getverbose") )
 		return doGetVerbose(argv[2]);
+	if ( !strcmp(cmd, "checksums") )
+		return doChecksums(argv[2]);
 	if ( !strcmp(cmd, "setverbose") )
 	{
 		if ( argc < 4 )

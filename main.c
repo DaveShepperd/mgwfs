@@ -13,6 +13,8 @@
 #include "mgwfs.h"
 #include "version.h"
 
+#define FAKE_TIMESTAMP (850600800)	/* 1996-12-14 14:00:00 PDT */
+
 static void helpEm(FILE *ofp, const char *progname)
 {
 	fprintf(ofp, "Usage: %s [options] <mountpoint>\n", progname);
@@ -179,6 +181,8 @@ int main(int argc, char *argv[])
 	ourSuper.defaultAllocation = options.allocation;
 	ourSuper.defaultCopies = options.copies;
 	ourSuper.imageName = options.image;
+	ourSuper.lowestCtime = -1;
+	ourSuper.lowestMtime = -1;
 	if ( !options.show_help && !options.show_version )
 	{
 		if ( ourSuper.verbose )
@@ -263,15 +267,26 @@ int main(int argc, char *argv[])
 				ret = -1;
 				break;
 			}
+#if 0
 			// Early versions of homeblock did not have timestamps or max_lba fields set.
 			// So fake it. The time here probably is close enough.
 			if ( !ourSuper.homeBlk.ctime )
 			{
 				fprintf(ourSuper.logFile,"homeBlk.ctime is 0, so faking 1996-12-14 14:00:00 PDT\n");
-				ourSuper.homeBlk.ctime = 850600800;	/* 1996-12-14 14:00:00 PDT */
+				ourSuper.homeBlk.ctime = FAKE_TIMESTAMP;	/* 1996-12-14 14:00:00 PDT */
 			}
+			else if ( ourSuper.homeBlk.ctime < ourSuper.lowestCtime )
+				ourSuper.lowestCtime = ourSuper.homeBlk.ctime;
 			if ( !ourSuper.homeBlk.mtime )
 				ourSuper.homeBlk.mtime = ourSuper.homeBlk.ctime;
+			else if ( ourSuper.homeBlk.mtime < ourSuper.lowestMtime )
+				ourSuper.lowestMtime = ourSuper.homeBlk.mtime;
+#else
+			if ( ourSuper.homeBlk.ctime && ourSuper.homeBlk.ctime < ourSuper.lowestCtime )
+				ourSuper.lowestCtime = ourSuper.homeBlk.ctime;
+			if ( ourSuper.homeBlk.mtime && ourSuper.homeBlk.mtime < ourSuper.lowestMtime )
+				ourSuper.lowestMtime = ourSuper.homeBlk.mtime;
+#endif
 			if ( !ourSuper.homeBlk.max_lba )
 			{
 				fprintf(ourSuper.logFile, "homeBlk.max_lba is 0 so setting it to %ld\n", sizeInSectors );
@@ -308,6 +323,10 @@ int main(int argc, char *argv[])
 						displayFileHeader(ourSuper.logFile,&ourSuper.indexSysHdr,1|(ourSuper.verbose&VERBOSE_RETPTRS));
 					dumpIndex(ourSuper.logFile, ourSuper.indexSys, ourSuper.indexSysHdr.size);
 				}
+				if ( ourSuper.indexSysHdr.ctime && ourSuper.indexSysHdr.ctime < ourSuper.lowestCtime )
+					ourSuper.lowestCtime = ourSuper.indexSysHdr.ctime;
+				if ( ourSuper.indexSysHdr.mtime && ourSuper.indexSysHdr.mtime < ourSuper.lowestMtime )
+					ourSuper.lowestMtime = ourSuper.indexSysHdr.mtime;
 			}
 			else
 			{
@@ -381,13 +400,13 @@ int main(int argc, char *argv[])
 				if ( getFileHeader(tmpName, &ourSuper, FSYS_ID_HEADER, lbas, &inode->fsHeader) )
 				{
 					inode->inode_no = ii;
+					if ( inode->fsHeader.mtime && inode->fsHeader.mtime < ourSuper.lowestMtime )
+						ourSuper.lowestMtime = inode->fsHeader.mtime;
+					if ( inode->fsHeader.ctime && inode->fsHeader.ctime < ourSuper.lowestCtime )
+						ourSuper.lowestCtime = inode->fsHeader.ctime;
 					if ( (inode->fsHeader.type == FSYS_TYPE_DIR) )
 					{
 						inode->mode = S_IFDIR | 0555;
-						if ( !inode->fsHeader.mtime )
-							inode->fsHeader.mtime = ourSuper.homeBlk.mtime;
-						if ( !inode->fsHeader.ctime )
-							inode->fsHeader.ctime = ourSuper.homeBlk.ctime;
 					}
 					else
 						inode->mode =  S_IFREG | 0444;
@@ -434,6 +453,28 @@ int main(int argc, char *argv[])
 			if ( (ourSuper.verbose&VERBOSE_MINIMUM) )
 			{
 				fprintf(ourSuper.logFile, "Inode info: inode size: %ld, inodesAvailable: %d, inodesUsed: %d\n", sizeof(MgwfsInode_t), ourSuper.numInodesAvailable, ourSuper.numInodesUsed);
+			}
+			/* Put fake timestamps in the file headers that are missing them */
+			if ( ourSuper.lowestCtime == -1 )
+				ourSuper.lowestCtime = FAKE_TIMESTAMP;
+			if ( ourSuper.lowestMtime == -1 )
+				ourSuper.lowestMtime = FAKE_TIMESTAMP;
+			if ( !ourSuper.indexSysHdr.ctime )
+				ourSuper.indexSysHdr.ctime = ourSuper.lowestCtime;
+			if ( !ourSuper.indexSysHdr.mtime )
+				ourSuper.indexSysHdr.mtime = ourSuper.lowestMtime;
+			if ( !ourSuper.homeBlk.ctime )
+				ourSuper.homeBlk.ctime = ourSuper.lowestCtime;
+			if ( !ourSuper.homeBlk.mtime )
+				ourSuper.homeBlk.mtime = ourSuper.lowestMtime;
+			inodePtr = ourSuper.inodeList;
+			for (ii=0; ii < ourSuper.numInodesUsed; ++ii)
+			{
+				inode = *inodePtr++;
+				if ( !inode->fsHeader.ctime )
+					inode->fsHeader.ctime = ourSuper.lowestCtime;
+				if ( !inode->fsHeader.mtime )
+					inode->fsHeader.mtime = ourSuper.lowestMtime;
 			}
 			/* The first 4 files don't actually belong to any directory and have no name, so fake it */
 			inodePtr = ourSuper.inodeList;

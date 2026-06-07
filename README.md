@@ -57,5 +57,23 @@ boot file with an additional command line argument:
 ```
 Would assign the boot file to slot 3 of the 4 available.
 
+Some Atari games have a diags/checksums file. This file contains a checksum of every file on the disk, except for
+the index.sys, freemap.sys and any directory file. The game code looks specifically for that checksums file in that
+diags directory. I'm thinking it is only used when running some test selected via the selftest menus, but don't hold
+me to that. It's been a long time. So you can use the mgwfsctl app to build a new checksums file:
+
+```
+./mgwfsctl checksums /mnt/mgw/diags/checksums
+```
+Technically you could put the checksums file anywhere and name it whatever you want, but it does have to pre-exist.
+So, for example, if you don't already have a /mnt/mgw/foobar.cs, then:
+
+```
+touch /mnt/mgw/foobar.cs
+./mgwfsctl checksums /mnt/mgw/foobar.cs
+```
+
+will put the checksums in foobar.cs, but the game code won't read it.
+
 Good luck.
 

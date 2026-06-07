@@ -50,5 +50,6 @@ typedef struct
 #define MGWFS_IOC_SETBOOT1		_IOW(MGWFS_IOC_MAGIC, 5, char *)
 #define MGWFS_IOC_SETBOOT2		_IOW(MGWFS_IOC_MAGIC, 6, char *)
 #define MGWFS_IOC_SETBOOT3		_IOW(MGWFS_IOC_MAGIC, 7, char *)
+#define MGWFS_IOC_CHECKSUMS		_IOW(MGWFS_IOC_MAGIC, 8, char *)
 
 #endif /* MGWFS_IOCTL_H_ */

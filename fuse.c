@@ -1420,6 +1420,118 @@ static void buildBootFNPath(char *dst, int maxLen, MgwfsInode_t *inode)
 	}
 }
 
+static uint32_t checksumBuffer(const uint32_t *ptr, int bytes)
+{
+	uint32_t cksum=0;
+	while ( bytes > 0 )
+	{
+		cksum += *ptr++;
+		bytes -= 4;
+	}
+	return cksum;
+}
+
+/* This function walks nearly the entire list of inodes, reads each non-directory file
+   computes a checksum of the file's contents, stashes the result in an array
+   then writes that array to the file specified by 'path'. */
+static int computeChecksumFile(const char *path)
+{
+	MgwfsInode_t *inode, *cksumInode;
+	int sts, cksumListSize, cksumIdx, inodeIdx;
+	uint32_t *cksumBuffTop, *cksumPtr;
+	static const char Title[] = "mgwfs_ioctl(checksum)";
+	
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_WRITES)) )
+	{
+		fprintf(ourSuper.logFile, "FUSE %s %s\n", Title, path );
+		fflush(ourSuper.logFile);
+	}
+	cksumListSize = ourSuper.numInodesUsed*2*sizeof(uint32_t);
+	cksumBuffTop = (uint32_t *)malloc(cksumListSize);
+	if ( !cksumBuffTop )
+	{
+		fprintf(stderr,"%s Out of memory allocating %ld bytes for checksum file\n", Title, ourSuper.numInodesUsed*2*sizeof(uint32_t));
+		UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+		return -ENOMEM;
+	}
+	cksumIdx = findInode(&ourSuper,FSYS_INDEX_ROOT,path);
+	if ( !cksumIdx )
+	{
+		UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+		return -ENOENT;
+	}
+	// Found an existing file. Delete it.
+	cksumInode = ourSuper.inodeList[cksumIdx];
+	if ( S_ISDIR(cksumInode->mode) )
+	{
+		if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_WRITES)) )
+			fprintf(ourSuper.logFile, "FUSE %s %s (inode %d) returned -EINVAL because it is a directory\n",
+					Title, path, cksumIdx);
+		else
+			fprintf(stderr, "FUSE %s %s (inode %d) returned -EINVAL because it is a directory\n",
+					Title, path, cksumIdx);
+		free(cksumBuffTop);
+		UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+		return -EINVAL;
+	}
+	inodeIdx = FSYS_INDEX_ROOT + 1;
+	if ( (ourSuper.homeBlk.features&FSYS_FEATURES_JOURNAL) )
+		++inodeIdx;
+	cksumPtr = cksumBuffTop;
+	for (; inodeIdx < ourSuper.numInodesUsed; ++inodeIdx )
+	{
+		if ( inodeIdx == cksumIdx )
+			continue;	/* Don't checksum the checksums file */
+		inode = ourSuper.inodeList[inodeIdx];
+		if ( inode )
+		{
+			/* Don't checksum directory files */
+			if ( !S_ISDIR(inode->mode) )
+			{
+				if ( inode->rwb.buff )
+				{
+					free(inode->rwb.buff);
+					memset(&inode->rwb,0,sizeof(RwBuff_t));
+					inode->fsHeader.size = 0;
+				}
+				inode->rwb.buff = (uint8_t *)malloc(inode->fsHeader.clusters*BYTES_PER_SECTOR);
+				if ( !inode->rwb.buff )
+				{
+					fprintf(stderr, "FUSE %s %s failed to malloc %d bytes to read %s. Skipped.\n",
+							Title, path, inode->fsHeader.clusters*BYTES_PER_SECTOR, inode->fileName);
+					continue;
+				}
+				inode->rwb.buffSize = inode->fsHeader.clusters*BYTES_PER_SECTOR;
+				inode->rwb.buffUsed = inode->fsHeader.size;
+				inode->rwb.buffOffset = inode->rwb.buffUsed;
+				sts = readWholeFile(Title, &ourSuper, inode->rwb.buff, inode->rwb.buffUsed, inode->fsHeader.pointers[0]);
+				if ( sts >= 0 )
+				{
+					*cksumPtr++ = (inode->inode_no & 0x00FFFFFF) | (inode->fsHeader.generation<<24);
+					*cksumPtr++ = checksumBuffer((const uint32_t *)inode->rwb.buff, inode->rwb.buffUsed);
+				}
+				else
+				{
+					fprintf(stderr, "FUSE %s %s failed to read %d bytes from %s. Skipped.\n",
+							Title, path, inode->rwb.buffUsed, inode->fileName);
+				}
+				free(inode->rwb.buff);
+				memset(&inode->rwb,0,sizeof(inode->rwb));
+			}
+		}
+	}
+	cksumInode->rwb.buff = (uint8_t *)cksumBuffTop; 	/* buffer gets free()'d in udpateAllMetaData() */
+	cksumInode->rwb.buffSize = cksumListSize;
+	cksumInode->rwb.buffUsed = (uint8_t *)cksumPtr - (uint8_t *)cksumBuffTop;
+	cksumInode->rwb.buffOffset = cksumInode->rwb.buffUsed;
+	cksumInode->rwb.buffErr = 0;
+	addToDirty(Title, &ourSuper, cksumInode->inode_no);
+	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+	updateAllMetaData(Title,&ourSuper);
+	return 0;
+}
+
 static int mgwfs_ioctl(const char *path, int cmd, void *arg,
 					   struct fuse_file_info *fi, unsigned int flags, void *data)
 {
@@ -1545,6 +1657,12 @@ static int mgwfs_ioctl(const char *path, int cmd, void *arg,
 			break;
 		}
 		sts = -EINVAL;
+		break;
+	case MGWFS_IOC_CHECKSUMS:
+		if ( options.read_write )
+			sts = computeChecksumFile(path);
+		else
+			sts = -EROFS;
 		break;
 	default:
 		sts = -EINVAL;

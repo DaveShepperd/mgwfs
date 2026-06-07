@@ -1,8 +1,9 @@
 #!/bin/bash
 
 GAME=sfrush
-GOOD=sfrush
-MAYBE=here
+GOOD=../afsys/img_sfrush
+#MAYBE=here
+MAYBE=test
 LIST=$GAME.files
 
 if [ ! -d $GOOD ]; then

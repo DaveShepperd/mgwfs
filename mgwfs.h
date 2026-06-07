@@ -14,6 +14,7 @@
 #include <fuse3/fuse.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <stddef.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -155,7 +156,6 @@ typedef struct
 
 typedef struct MgwfsSuper_t
 {
-	/* Not sure if a mutex is needed, but just to be safe we use one to force single threading */
 	int fd;					/* file descriptor used to read/write image file */
 	const char *imageName;	/* path to the image file */
 	uint32_t verbose;		/* verbose flags */
@@ -180,6 +180,8 @@ typedef struct MgwfsSuper_t
 	FILE *errFile;			/* Defaults to stderr */
 	FuseFH_t *fuseFHs;		/* list of fuse open files */
 	int numFuseFHs;			/* number of items available in fuseFHs */
+	uint32_t lowestCtime;	/* lowest non-zero ctime found anywhere */
+	uint32_t lowestMtime;	/* lowest non-zero ctime found anywhere */
 } MgwfsSuper_t;
 
 #include "mgwfsctl.h"
@@ -264,7 +266,6 @@ extern MgwfsSuper_t ourSuper;
 extern int fileOpen(const char *title, const char *path, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern int fileClose(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern int fileRename(const char *title, MgwfsSuper_t *ourSuper, const char *oldPath, const char *newPath);
-//extern int fileRead(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp, off_t offset, size_t bytes);
 extern int fileCreate(const char *title, const char *path, MgwfsSuper_t *ourSuper);
 extern int fileExtend(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern int fileWrite(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp, off_t offset, size_t bytes);
@@ -275,7 +276,7 @@ extern void displayHomeBlock(FILE *outp, const FsysHomeBlock *homeBlkp, uint32_t
 extern int getHomeBlock(MgwfsSuper_t *ourSuper, off64_t maxHb, off64_t sizeInSectors, uint32_t *ckSumP);
 extern int getFileHeader(const char *title, MgwfsSuper_t *ourSuper, uint32_t id, IndexSys_t *lbas, FsysHeader *fhp);
 extern int readWholeFile(const char *title,  MgwfsSuper_t *ourSuper, uint8_t *dst, int bytes, FsysRetPtr *retPtr);
-//extern int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
+extern int writeWholeFile(const char *title,  MgwfsSuper_t *ourSuper, MgwfsInode_t *inode);
 extern int flushFile(const char *title, MgwfsSuper_t *ourSuper, FuseFH_t *fhp);
 extern void dumpIndex(FILE *outp, IndexSys_t *indexBase, int bytes);
 extern int dumpFreemap(FILE *outp, const char *title, FsysRetPtr *rpBase, int maxEntries, uint32_t *totSectors );
@@ -287,9 +288,6 @@ extern int findInode(MgwfsSuper_t *ourSuper, int topIdx, const char *path);
 extern int countSectors(FsysRetPtr *rp, int maxRps, uint32_t *totalSectors);
 extern FuseFH_t *getFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx);
 extern void freeFuseFHidx(MgwfsSuper_t *ourSuper, uint64_t idx);
-//extern int writeHomeBlock(MgwfsSuper_t *super);
-//extern int writeIndexSys(MgwfsSuper_t *super);
-//extern int writeFreeMapSys(MgwfsSuper_t *super);
 extern int writeFileHeader(MgwfsSuper_t *super, MgwfsInode_t *inode);
 extern int writeDirectory(MgwfsSuper_t *super, MgwfsInode_t *dir);
 extern int allocateRPSectors(const char *title, MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, RwBuff_t *rwBuff, int sectors);
@@ -300,8 +298,6 @@ extern void addToDirty(const char *title, MgwfsSuper_t *super, int idx);
 
 /* functions in freemap.c */
 #define FREEM_FLAG_MARK_DIRTY	(0x01)
-//#define FREEM_FLAG_TRY_ONLY		(0x02)
-//#define FREEM_FLAG_NO_RESCAN	(0x04)
 extern void mgwfsDumpFreeMap( MgwfsSuper_t *ourSuper, const char *title, const FreeMap_t *freeMapPtr );
 extern int mgwfsFindFree(MgwfsSuper_t *ourSuper, MgwfsFoundFreeMap_t *stuff, int numSectors, uint32_t flags );
 extern int mgwfsFreeSectors(MgwfsSuper_t *ourSuper, FsysRetPtr *retp, uint32_t flags);

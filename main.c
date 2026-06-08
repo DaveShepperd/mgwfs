@@ -46,6 +46,7 @@ static void helpEm(FILE *ofp, const char *progname)
 	fprintf(ofp, "    0x%05X = display anything FUSE related\n", VERBOSE_FUSE);
 	fprintf(ofp, "    0x%05X = display FUSE function calls\n", VERBOSE_FUSE_CMD);
 	fprintf(ofp, "    0x%05X = display anything related to file writes\n", VERBOSE_WRITES);
+	fprintf(ofp, "    0x%05X = display reading+writing checksums file\n", VERBOSE_CHECKSUMS);
 #if !NO_MUTEXES
 	fprintf(ofp, "    0x%05X = display details of locks/unlocks\n", VERBOSE_LOCKS);
 #endif

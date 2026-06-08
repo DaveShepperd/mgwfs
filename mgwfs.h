@@ -106,6 +106,7 @@ enum
 	VERB_BIT_FUSE,
 	VERB_BIT_FUSE_CMD,
 	VERB_BIT_WRITES,
+	VERB_BIT_CHECKSUMS,
 #if !NO_MUTEXES
 	VERB_BIT_LOCKS,
 #endif
@@ -129,6 +130,7 @@ enum
 #define VERBOSE_FUSE		(1<<VERB_BIT_FUSE)		/* Show fuse stuff */
 #define VERBOSE_FUSE_CMD	(1<<VERB_BIT_FUSE_CMD)	/* Show fuse commands */
 #define VERBOSE_WRITES		(1<<VERB_BIT_WRITES)	/* Show details of anything related to file writes */
+#define VERBOSE_CHECKSUMS	(1<<VERB_BIT_CHECKSUMS)	/* Show details of reading+writing checksums file */
 #if !NO_MUTEXES
 #define VERBOSE_LOCKS		(1<<VERB_BIT_LOCKS)		/* Show details of lock/unlock */
 #endif

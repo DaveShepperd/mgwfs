@@ -26,7 +26,7 @@ mkdir game
 Use ./mgwfs --help for list of command line options.
 ```
 
-It has taken ne quite a while to get to it, but with the enormous and grateful help of Claude 4.8, write functionality has been added.
+It has taken me quite a while to get to it, but with the enormous and grateful help of Claude 4.8, write functionality has been added.
 I haven't done a lot of testing with it. Claude did quite a bit of testing while it was writing its stuff, so it probably works okay.
 Add the --rw command line option to allow read/write to the image.
 
@@ -55,7 +55,7 @@ boot file with an additional command line argument:
 ```
 ./mgwfsctl setboot /mnt/mgw/somewhere/over/the/rainbow/bootme.img 3
 ```
-Would assign the boot file to slot 3 of the 4 available.
+Would assign the boot file to last slot of the 4 available (numbered 0 through 3).
 
 Some Atari games have a diags/checksums file. This file contains a checksum of every file on the disk, except for
 the index.sys, freemap.sys and any directory file. The game code looks specifically for that checksums file in that
@@ -73,7 +73,12 @@ touch /mnt/mgw/foobar.cs
 ./mgwfsctl checksums /mnt/mgw/foobar.cs
 ```
 
-will put the checksums in foobar.cs, but the game code won't read it.
+will put the checksums in foobar.cs, but the game code won't read it. You have to put the checksums in diags/checksums.
+
+Note also, if the existing checksums file has a size of 0, it will checksum every file on the disk. If there is an existing
+checksum file, it will only (re)compute checksums on the files listed therein. You will have to use the companion project,
+[afsys](https://github.com/daveshepperd/afsys.git), to select which files get checksums or not (or write your own
+diags/checksums file and just copy it).
 
 Good luck.
 

@@ -278,6 +278,7 @@
 			<F N="agcfsys.h"/>
 			<F N="mgwfs.h"/>
 			<F N="mgwfsctl.h"/>
+			<F N="version.h"/>
 			<F N="walk.sh"/>
 		</Folder>
 		<Folder

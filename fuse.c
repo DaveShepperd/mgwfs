@@ -1431,37 +1431,66 @@ static uint32_t checksumBuffer(const uint32_t *ptr, int bytes)
 	return cksum;
 }
 
+typedef struct
+{
+	uint32_t fid;
+	uint32_t cksum;
+} CheckSum_t;
+
+static int readForChecksum(const char *Title, MgwfsSuper_t *ourSuper, MgwfsInode_t *inode, const char *msg)
+{
+	int sts;
+
+	if ( inode->rwb.buff )
+	{
+		free(inode->rwb.buff);
+		memset(&inode->rwb,0,sizeof(RwBuff_t));
+		inode->fsHeader.size = 0;
+	}
+	inode->rwb.buff = (uint8_t *)malloc(inode->fsHeader.clusters*BYTES_PER_SECTOR);
+	if ( !inode->rwb.buff )
+	{
+		fprintf(stderr, "FUSE %s failed to malloc %d bytes to read %s. %s.\n",
+				Title, inode->fsHeader.clusters*BYTES_PER_SECTOR, inode->fileName, msg);
+		return -ENOMEM;
+	}
+	inode->rwb.buffSize = inode->fsHeader.clusters*BYTES_PER_SECTOR;
+	inode->rwb.buffUsed = inode->fsHeader.size;
+	inode->rwb.buffOffset = inode->rwb.buffUsed;
+	sts = readWholeFile(Title, ourSuper, inode->rwb.buff, inode->rwb.buffUsed, inode->fsHeader.pointers[0]);
+	if ( sts < 0 )
+	{
+		fprintf(stderr, "FUSE %s failed to read %d bytes from %s. %s.\n",
+				Title, inode->rwb.buffUsed, inode->fileName, msg);
+		return -EIO;
+	}
+	return sts;
+}
+
 /* This function walks nearly the entire list of inodes, reads each non-directory file
    computes a checksum of the file's contents, stashes the result in an array
    then writes that array to the file specified by 'path'. */
 static int computeChecksumFile(const char *path)
 {
 	MgwfsInode_t *inode, *cksumInode;
+	CheckSum_t *existingCS=NULL, *cksumBuffTop, *cksumPtr;
+	int numExistingCS=0;
 	int sts, cksumListSize, cksumIdx, inodeIdx;
-	uint32_t *cksumBuffTop, *cksumPtr;
 	static const char Title[] = "mgwfs_ioctl(checksum)";
+	uint32_t newCksum;
 	
-	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
-	if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_WRITES)) )
+	if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_CHECKSUMS)) )
 	{
 		fprintf(ourSuper.logFile, "FUSE %s %s\n", Title, path );
 		fflush(ourSuper.logFile);
 	}
-	cksumListSize = ourSuper.numInodesUsed*2*sizeof(uint32_t);
-	cksumBuffTop = (uint32_t *)malloc(cksumListSize);
-	if ( !cksumBuffTop )
-	{
-		fprintf(stderr,"%s Out of memory allocating %ld bytes for checksum file\n", Title, ourSuper.numInodesUsed*2*sizeof(uint32_t));
-		UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
-		return -ENOMEM;
-	}
+	LOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	cksumIdx = findInode(&ourSuper,FSYS_INDEX_ROOT,path);
 	if ( !cksumIdx )
 	{
 		UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 		return -ENOENT;
 	}
-	// Found an existing file. Delete it.
 	cksumInode = ourSuper.inodeList[cksumIdx];
 	if ( S_ISDIR(cksumInode->mode) )
 	{
@@ -1471,61 +1500,112 @@ static int computeChecksumFile(const char *path)
 		else
 			fprintf(stderr, "FUSE %s %s (inode %d) returned -EINVAL because it is a directory\n",
 					Title, path, cksumIdx);
-		free(cksumBuffTop);
 		UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 		return -EINVAL;
 	}
-	inodeIdx = FSYS_INDEX_ROOT + 1;
-	if ( (ourSuper.homeBlk.features&FSYS_FEATURES_JOURNAL) )
-		++inodeIdx;
-	cksumPtr = cksumBuffTop;
-	for (; inodeIdx < ourSuper.numInodesUsed; ++inodeIdx )
+	if ( cksumInode->fsHeader.size )
 	{
-		if ( inodeIdx == cksumIdx )
-			continue;	/* Don't checksum the checksums file */
-		inode = ourSuper.inodeList[inodeIdx];
-		if ( inode )
+		if ( (cksumInode->fsHeader.size&(sizeof(CheckSum_t)-1)) )
 		{
-			/* Don't checksum directory files */
-			if ( !S_ISDIR(inode->mode) )
+			if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_CHECKSUMS)) )
 			{
-				if ( inode->rwb.buff )
+				fprintf(ourSuper.logFile, "FUSE %s %s (inode %d) returned -EINVAL because file has invalid size of %d\n",
+						Title, path, cksumIdx, cksumInode->fsHeader.size);
+			}
+			UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+			return -EINVAL;
+		}
+		// Pre-read the file
+		sts = readForChecksum(Title,&ourSuper,cksumInode,"Cannot do checksums");
+		if ( sts < 0 )
+		{
+			UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+			return sts;
+		}
+		if ( sts )
+		{
+			existingCS = (CheckSum_t *)cksumInode->rwb.buff;
+			numExistingCS = cksumInode->fsHeader.size/sizeof(CheckSum_t);
+		}
+	}
+	if ( existingCS )
+	{
+		int ii;
+		if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_CHECKSUMS)) )
+			fprintf(ourSuper.logFile, "FUSE %s %s (inode %d) has %ld existing entries\n",
+					Title, path, cksumIdx, cksumInode->fsHeader.size/sizeof(CheckSum_t));
+		for (ii=0; ii < numExistingCS; ++ii)
+		{
+			inodeIdx = existingCS[ii].fid&0x00FFFFFF;
+			if ( inodeIdx == cksumIdx )
+				continue;	/* Don't checksum the checksums file */
+			inode = ourSuper.inodeList[inodeIdx];
+			if ( inode )
+			{
+				/* Don't checksum directory files */
+				if ( !S_ISDIR(inode->mode) )
 				{
+					uint32_t newCksum;
+					sts = readForChecksum(Title,&ourSuper,inode,"Skipped");
+					if ( sts < 0 )
+						continue;
+					newCksum = checksumBuffer((const uint32_t *)inode->rwb.buff, inode->rwb.buffUsed);
+					if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_CHECKSUMS)) )
+						fprintf(ourSuper.logFile, "FUSE %s checksumed %s (inode %d) old cs: 0x%08X, new cs: 0x%08X\n",
+								Title, inode->fileName, inode->inode_no, existingCS[ii].cksum, newCksum);
+					existingCS[ii].cksum = newCksum;
 					free(inode->rwb.buff);
-					memset(&inode->rwb,0,sizeof(RwBuff_t));
-					inode->fsHeader.size = 0;
+					memset(&inode->rwb,0,sizeof(inode->rwb));
 				}
-				inode->rwb.buff = (uint8_t *)malloc(inode->fsHeader.clusters*BYTES_PER_SECTOR);
-				if ( !inode->rwb.buff )
-				{
-					fprintf(stderr, "FUSE %s %s failed to malloc %d bytes to read %s. Skipped.\n",
-							Title, path, inode->fsHeader.clusters*BYTES_PER_SECTOR, inode->fileName);
-					continue;
-				}
-				inode->rwb.buffSize = inode->fsHeader.clusters*BYTES_PER_SECTOR;
-				inode->rwb.buffUsed = inode->fsHeader.size;
-				inode->rwb.buffOffset = inode->rwb.buffUsed;
-				sts = readWholeFile(Title, &ourSuper, inode->rwb.buff, inode->rwb.buffUsed, inode->fsHeader.pointers[0]);
-				if ( sts >= 0 )
-				{
-					*cksumPtr++ = (inode->inode_no & 0x00FFFFFF) | (inode->fsHeader.generation<<24);
-					*cksumPtr++ = checksumBuffer((const uint32_t *)inode->rwb.buff, inode->rwb.buffUsed);
-				}
-				else
-				{
-					fprintf(stderr, "FUSE %s %s failed to read %d bytes from %s. Skipped.\n",
-							Title, path, inode->rwb.buffUsed, inode->fileName);
-				}
-				free(inode->rwb.buff);
-				memset(&inode->rwb,0,sizeof(inode->rwb));
 			}
 		}
 	}
-	cksumInode->rwb.buff = (uint8_t *)cksumBuffTop; 	/* buffer gets free()'d in udpateAllMetaData() */
-	cksumInode->rwb.buffSize = cksumListSize;
-	cksumInode->rwb.buffUsed = (uint8_t *)cksumPtr - (uint8_t *)cksumBuffTop;
-	cksumInode->rwb.buffOffset = cksumInode->rwb.buffUsed;
-	cksumInode->rwb.buffErr = 0;
+	else
+	{
+		cksumListSize = ourSuper.numInodesUsed*sizeof(CheckSum_t);
+		cksumBuffTop = (CheckSum_t *)malloc(cksumListSize);
+		if ( !cksumBuffTop )
+		{
+			fprintf(stderr,"%s Out of memory allocating %d bytes for checksum file\n", Title, cksumListSize);
+			UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
+			return -ENOMEM;
+		}
+		cksumPtr = cksumBuffTop;
+		inodeIdx = FSYS_INDEX_ROOT + 1;
+		if ( (ourSuper.homeBlk.features&FSYS_FEATURES_JOURNAL) )
+			++inodeIdx;
+		for (; inodeIdx < ourSuper.numInodesUsed; ++inodeIdx )
+		{
+			if ( inodeIdx == cksumIdx )
+				continue;	/* Don't checksum the checksums file */
+			inode = ourSuper.inodeList[inodeIdx];
+			if ( inode )
+			{
+				/* Don't checksum directory files */
+				if ( !S_ISDIR(inode->mode) )
+				{
+					
+					sts = readForChecksum(Title,&ourSuper,inode,"Skipped");
+					if ( sts < 0 )
+						continue;
+					cksumPtr->fid = (inode->inode_no & 0x00FFFFFF) | (inode->fsHeader.generation << 24);
+					newCksum = checksumBuffer((const uint32_t *)inode->rwb.buff, inode->rwb.buffUsed);
+					if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_CHECKSUMS)) )
+						fprintf(ourSuper.logFile, "FUSE %s checksumed %s (inode %d) new cs: 0x%08X\n",
+								Title, inode->fileName, inode->inode_no, newCksum);
+					cksumPtr->cksum = newCksum;
+					++cksumPtr;
+					free(inode->rwb.buff);
+					memset(&inode->rwb,0,sizeof(inode->rwb));
+				}
+			}
+		}
+		cksumInode->rwb.buff = (uint8_t *)cksumBuffTop; 	/* buffer gets free()'d in udpateAllMetaData() */
+		cksumInode->rwb.buffSize = cksumListSize;
+		cksumInode->rwb.buffUsed = (uint8_t *)cksumPtr - (uint8_t *)cksumBuffTop;
+		cksumInode->rwb.buffOffset = cksumInode->rwb.buffUsed;
+		cksumInode->rwb.buffErr = 0;
+	}
 	addToDirty(Title, &ourSuper, cksumInode->inode_no);
 	UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 	updateAllMetaData(Title,&ourSuper);

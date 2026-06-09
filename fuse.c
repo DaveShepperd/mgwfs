@@ -1445,7 +1445,6 @@ static int readForChecksum(const char *Title, MgwfsSuper_t *ourSuper, MgwfsInode
 	{
 		free(inode->rwb.buff);
 		memset(&inode->rwb,0,sizeof(RwBuff_t));
-		inode->fsHeader.size = 0;
 	}
 	inode->rwb.buff = (uint8_t *)malloc(inode->fsHeader.clusters*BYTES_PER_SECTOR);
 	if ( !inode->rwb.buff )
@@ -1515,7 +1514,7 @@ static int computeChecksumFile(const char *path)
 			UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 			return -EINVAL;
 		}
-		// Pre-read the file
+		// Pre-read the checksums file
 		sts = readForChecksum(Title,&ourSuper,cksumInode,"Cannot do checksums");
 		if ( sts < 0 )
 		{
@@ -1528,12 +1527,12 @@ static int computeChecksumFile(const char *path)
 			numExistingCS = cksumInode->fsHeader.size/sizeof(CheckSum_t);
 		}
 	}
+	if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_CHECKSUMS)) )
+		fprintf(ourSuper.logFile, "FUSE %s %s (inode %d) has %ld existing entries\n",
+				Title, path, cksumIdx, cksumInode->fsHeader.size/sizeof(CheckSum_t));
 	if ( existingCS )
 	{
 		int ii;
-		if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_CHECKSUMS)) )
-			fprintf(ourSuper.logFile, "FUSE %s %s (inode %d) has %ld existing entries\n",
-					Title, path, cksumIdx, cksumInode->fsHeader.size/sizeof(CheckSum_t));
 		for (ii=0; ii < numExistingCS; ++ii)
 		{
 			inodeIdx = existingCS[ii].fid&0x00FFFFFF;
@@ -1551,8 +1550,14 @@ static int computeChecksumFile(const char *path)
 						continue;
 					newCksum = checksumBuffer((const uint32_t *)inode->rwb.buff, inode->rwb.buffUsed);
 					if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_CHECKSUMS)) )
-						fprintf(ourSuper.logFile, "FUSE %s checksumed %s (inode %d) old cs: 0x%08X, new cs: 0x%08X\n",
-								Title, inode->fileName, inode->inode_no, existingCS[ii].cksum, newCksum);
+					{
+						if ( newCksum == existingCS[ii].cksum )
+							fprintf(ourSuper.logFile, "FUSE %s checksumed %s (inode %d) cs: 0x%08X match existing\n",
+									Title, inode->fileName, inode->inode_no, existingCS[ii].cksum);
+						else
+							fprintf(ourSuper.logFile, "FUSE %s checksumed %s (inode %d) old cs: 0x%08X, new cs: 0x%08X\n",
+									Title, inode->fileName, inode->inode_no, existingCS[ii].cksum, newCksum);
+					}
 					existingCS[ii].cksum = newCksum;
 					free(inode->rwb.buff);
 					memset(&inode->rwb,0,sizeof(inode->rwb));
@@ -1570,6 +1575,9 @@ static int computeChecksumFile(const char *path)
 			UNLOCK_IT("rdMutex",&ourSuper,&rdMutex);
 			return -ENOMEM;
 		}
+		if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_CHECKSUMS)) )
+			fprintf(ourSuper.logFile, "FUSE %s %s (inode %d) creating brand new file\n",
+					Title, path, cksumIdx);
 		cksumPtr = cksumBuffTop;
 		inodeIdx = FSYS_INDEX_ROOT + 1;
 		if ( (ourSuper.homeBlk.features&FSYS_FEATURES_JOURNAL) )
@@ -1591,7 +1599,7 @@ static int computeChecksumFile(const char *path)
 					cksumPtr->fid = (inode->inode_no & 0x00FFFFFF) | (inode->fsHeader.generation << 24);
 					newCksum = checksumBuffer((const uint32_t *)inode->rwb.buff, inode->rwb.buffUsed);
 					if ( (ourSuper.verbose&(VERBOSE_FUSE_CMD|VERBOSE_CHECKSUMS)) )
-						fprintf(ourSuper.logFile, "FUSE %s checksumed %s (inode %d) new cs: 0x%08X\n",
+						fprintf(ourSuper.logFile, "FUSE %s checksumed %s (inode %d) computed cs: 0x%08X\n",
 								Title, inode->fileName, inode->inode_no, newCksum);
 					cksumPtr->cksum = newCksum;
 					++cksumPtr;

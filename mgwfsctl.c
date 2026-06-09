@@ -11,41 +11,57 @@
   Build: see Makefile target 'mgwfsctl' (it has no fuse dependency).
 */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE (1)
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
+#include <stdarg.h>
+#include <getopt.h>
 #include <string.h>
+#include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <unistd.h>
 #include <inttypes.h>
 #include <sys/vfs.h>
+#include <stdint.h>
 
 #include "mgwfsctl.h"
 
 static const char *Prog = "mgwfsctl";
 
-static void usage(FILE *fp)
+static void usage(FILE *fp, int quietly)
 {
 	fprintf(fp,
-		"Usage: %s <command> <path-in-mount> [arg]\n"
-		"  query a mounted mgwfs filesystem via ioctl(2). <path-in-mount> is any\n"
-		"  existing file or directory inside the mount point.\n"
-		"\n"
-		"Commands:\n"
-		"  stats <path>                print live filesystem statistics\n"
-		"  getverbose <path>           print the current verbose flags (hex)\n"
-		"  setverbose <path> <v>       set the verbose flags; <v> may be decimal, 0x.. hex, or 0.. octal\n"
-		"  setboot <path> [<v>]        set the file pointed to by 'path' to boot image 'v' (v can be 0, 1, 2 or 3, defaults to 0)\n"
-		"  checksums <path>            compute checksums and store the results in <path>\n"
-		"\n"
-		"Examples:\n"
-		"  %s stats /mnt/mgw\n"
-		"  %s getverbose /mnt/mgw/.\n"
-		"  %s setverbose /mnt/mgw 0x40000\n"
-		"  %s setboot /mnt/mgw/FOO/bar\n"
-		"  %s setboot /mnt/mgw/SOMEWHERE/rainbow 1\n"
-		"  %s checksums /mnt/mgw/diags/checksums\n"
-		, Prog, Prog, Prog, Prog, Prog, Prog, Prog);
+		"Usage: %s [options] <command> <path-in-mount> [arg]\n"
+		,Prog );
+	if ( !quietly )
+	{
+		fprintf(fp,
+			"  query a mounted mgwfs filesystem via ioctl(2). <path-in-mount> is any\n"
+			"  existing file or directory inside the mount point.\n"
+			"\n"
+			"Optional options:\n"
+			" -h or --help                 This message\n"
+			" -f                           With 'stats' command, also report returns from statfs()\n"
+			"Commands:\n"
+			"  stats <path>                print live filesystem statistics\n"
+			"  getverbose <path>           print the current verbose flags (hex)\n"
+			"  setverbose <path> <v>       set the verbose flags; <v> may be decimal, 0x.. hex, or 0.. octal\n"
+			"  setboot <path> [<v>]        set the file pointed to by 'path' to boot image 'v' (v can be 0, 1, 2 or 3, defaults to 0)\n"
+			"  checksums <path>            compute checksums and store the results in <path>\n"
+			"\n"
+			"Examples:\n"
+			"  %s stats /mnt/mgw\n"
+			"  %s getverbose /mnt/mgw/.\n"
+			"  %s setverbose /mnt/mgw 0x40000\n"
+			"  %s setboot /mnt/mgw/FOO/bar\n"
+			"  %s setboot /mnt/mgw/SOMEWHERE/rainbow 1\n"
+			"  %s checksums /mnt/mgw/diags/checksums\n"
+			, Prog, Prog, Prog, Prog, Prog, Prog);
+	}
 }
 
 /* Open a path inside the mount. O_RDONLY is enough; the ioctl does the work. */
@@ -57,28 +73,31 @@ static int openPath(const char *path)
 	return fd;
 }
 
-static int doStats(const char *path)
+static int doStats(const char *path, int doFSToo)
 {
 	MgwfsIoctlStats_t st;
-	struct statfs stfs;
 	int ii,lim;
 
 	int fd = openPath(path);
 	if ( fd < 0 )
 		return 1;
-	memset(&stfs,0,sizeof(stfs));
-	if ( statfs(path,&stfs) >= 0 )
+	if ( doFSToo )
 	{
-		printf("fs: f_type          : 0x%08lX\n", stfs.f_type);
-		printf("fs: f_bsize         : %10" PRIi64 "\n", stfs.f_bsize);
-		printf("fs: f_blocks        : %10" PRIi64 "\n", stfs.f_blocks);
-		printf("fs: f_bfree         : %10" PRIi64 "\n", stfs.f_bfree);
-		printf("fs: f_bavail        : %10" PRIi64 "\n", stfs.f_bavail);
-		printf("fs: f_files         : %10" PRIi64 "\n", stfs.f_files);
-		printf("fs: f_ffree         : %10" PRIi64 "\n", stfs.f_ffree);
-		printf("fs: f_namelen       : %10" PRIi64 "\n", stfs.f_namelen);
-		printf("fs: f_frsize        : %10" PRIi64 "\n", stfs.f_frsize);
-		printf("fs: f_flags         : 0x%08lX\n", stfs.f_flags);
+		struct statfs stfs;
+		memset(&stfs,0,sizeof(stfs));
+		if ( statfs(path, &stfs) >= 0 )
+		{
+			printf("fs: f_type          : 0x%08lX\n", stfs.f_type);
+			printf("fs: f_bsize         : %10" PRIi64 "\n", stfs.f_bsize);
+			printf("fs: f_blocks        : %10" PRIi64 "\n", stfs.f_blocks);
+			printf("fs: f_bfree         : %10" PRIi64 "\n", stfs.f_bfree);
+			printf("fs: f_bavail        : %10" PRIi64 "\n", stfs.f_bavail);
+			printf("fs: f_files         : %10" PRIi64 "\n", stfs.f_files);
+			printf("fs: f_ffree         : %10" PRIi64 "\n", stfs.f_ffree);
+			printf("fs: f_namelen       : %10" PRIi64 "\n", stfs.f_namelen);
+			printf("fs: f_frsize        : %10" PRIi64 "\n", stfs.f_frsize);
+			printf("fs: f_flags         : 0x%08lX\n", stfs.f_flags);
+		}
 	}
 	memset(&st, 0, sizeof(st));
 	if ( ioctl(fd, MGWFS_IOC_GETSTATS, &st) < 0 )
@@ -118,7 +137,7 @@ static int doStats(const char *path)
 	}
 	printf("verbose             : 0x%08" PRIx32 "\n", st.verbose);
 	if ( st.hbMajor == 1 && st.hbMinor < 3 )
-		printf("Version 1.%d filesystem has boot hardcoded to CODE/vmunix\n", st.hbMinor);
+		printf("Version 1.%d and earlier versions of filesystem have boot hardcoded to CODE/vmunix\n", st.hbMinor);
 	else 
 	{
 		if ( st.hbMajor == 1 && st.hbMinor < 6 )
@@ -243,56 +262,105 @@ static int doChecksums(const char *path)
 	return 0;
 }
 
+typedef enum
+{
+	OPT_HELP=1,
+	OPT_MAX
+} Options_t;
+
+static const struct option LongOptions[] =
+{
+	{ "help", no_argument,	NULL, OPT_HELP },
+	{ NULL, 0, NULL, 0 }
+};
+
+typedef enum
+{
+	ARG_CMD,
+	ARG_PATH,
+	ARG_ARG1,
+	ARG_ARG2,
+	ARG_ARG3,
+	ARG_MAX
+} Arguments_t;
+
 int main(int argc, char *argv[])
 {
-	const char *cmd;
-
+	const char *arguments[ARG_MAX];
+	int optArg, doFSToo=0;
+	
 	if ( argc > 0 && argv[0][0] )
 		Prog = argv[0];
-	if ( argc >= 2 && (!strcmp(argv[1], "-h") || !strcmp(argv[1], "--help") || !strcmp(argv[1], "help")) )
+	while ( 1 )
 	{
-		usage(stdout);
-		return 0;
-	}
-	if ( argc < 3 )
-	{
-		usage(stderr);
-		return 1;
-	}
-	cmd = argv[1];
-	if ( !strcmp(cmd, "stats") )
-		return doStats(argv[2]);
-	if ( !strcmp(cmd, "getverbose") )
-		return doGetVerbose(argv[2]);
-	if ( !strcmp(cmd, "checksums") )
-		return doChecksums(argv[2]);
-	if ( !strcmp(cmd, "setverbose") )
-	{
-		if ( argc < 4 )
+		optArg = getopt_long(argc, argv, "hf", LongOptions, NULL);
+		switch (optArg)
 		{
-			fprintf(stderr, "%s: setverbose requires a value\n", Prog);
-			usage(stderr);
+		case OPT_HELP:
+		case 'h':
+			usage(stdout, 0);
+			return 1;
+		case 'f':
+			doFSToo = 1;
+			break;
+		case 0:
+			break;
+		default:
+			if ( optArg < 0 )
+				break;
+			usage(stderr,1);
 			return 1;
 		}
-		return doSetVerbose(argv[2], argv[3]);
+		if ( optArg < 0 )
+			break;
 	}
-	if ( !strcmp(cmd, "setboot") )
+	memset(arguments,0,sizeof(arguments));
+	for (optArg=0; optArg < ARG_MAX; ++optArg)
+	{
+		if ( argc-optind < 0 )
+			break;
+		arguments[optArg] = argv[optind];
+		++optind;
+	}
+	if ( !arguments[ARG_CMD] || !arguments[ARG_PATH] )
+	{
+		fprintf(stderr,"Need both a command and a path\n");
+		usage(stderr, 1);
+		return 1;
+	}
+	if ( !strcmp(arguments[ARG_CMD], "stats") )
+		return doStats(arguments[ARG_PATH], doFSToo);
+	if ( !strcmp(arguments[ARG_CMD], "getverbose") )
+		return doGetVerbose(arguments[ARG_PATH]);
+	if ( !strcmp(arguments[ARG_CMD], "checksums") )
+		return doChecksums(arguments[ARG_PATH]);
+	if ( !strcmp(arguments[ARG_CMD], "setverbose") )
+	{
+		if ( !arguments[ARG_ARG1] )
+		{
+			fprintf(stderr, "%s: setverbose requires a value\n", Prog);
+			usage(stderr, 1);
+			return 1;
+		}
+		return doSetVerbose(arguments[ARG_PATH], arguments[ARG_ARG1]);
+	}
+	if ( !strcmp(arguments[ARG_CMD], "setboot") )
 	{
 		int bootNum=0;
-		if ( argc > 3 )
+		if ( arguments[ARG_ARG1] )
 		{
 			char *endp = NULL;
-			bootNum = strtol(argv[3],&endp,0);
+			bootNum = strtol(arguments[ARG_ARG1],&endp,0);
 			if ( !endp || *endp || bootNum < 0 || bootNum > 3 )
 			{
-				fprintf(stderr,"Boot number can only be 0, 1, 2 or 3: %s\n", argv[3]);
-				usage(stderr);
+				fprintf(stderr,"Boot number can only be 0, 1, 2 or 3: %s\n", arguments[ARG_ARG1]);
+				usage(stderr, 1);
 				return 1;
 			}
 		}
-		return doSetBoot(argv[2], bootNum);
+		return doSetBoot(arguments[ARG_PATH], bootNum);
 	}
-	fprintf(stderr, "%s: unknown command '%s'\n", Prog, cmd);
-	usage(stderr);
+	fprintf(stderr, "%s: unknown command '%s'\n", Prog, arguments[ARG_CMD]);
+	usage(stderr, 1);
 	return 1;
 }

@@ -22,7 +22,9 @@
 				OutputExts="*.o"
 				SaveOption="SaveCurrent"
 				RunFromDir="%rw">
-				<Exec CmdLine='gcc -c %xup %defd -g -Wall -Werror -o "%bd%n%oe" %i %f'/>
+				<Exec
+					CmdLine='gcc -c %xup %defd -g -Wall -Werror %~other -o "%bd%n%oe" %i %f'
+					OtherOptions="-std=gnu11"/>
 			</Target>
 			<Target
 				Name="Link"
@@ -129,7 +131,10 @@
 				Name="LinkerOutputType"
 				Value="Executable"/>
 		</List>
-		<Includes/>
+		<Includes>
+			<Include Dir="."/>
+			<Include Dir="/usr/include/fuse3"/>
+		</Includes>
 		<Libs PreObjects="0"/>
 	</Config>
 	<Config
